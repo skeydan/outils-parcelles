@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>outils-parcelles</title>
+  <meta name="description" content="Look up several French cadastre parcels at once: choose a commune, paste a list of section and number, and see them on an OpenStreetMap map with their area in m² and hectares–ares–centiares. In French and English.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/site.css">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <script>
+    try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+  <script type="module" src="app/main.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#/">
+      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true">
+        <path d="M3.5 8.5 L13.5 3.5 L24.5 8 L23.5 20.5 L12 25 L3.5 18.5 Z" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M13.5 3.5 L12.8 14.2 L23.5 20.5 M12.8 14.2 L3.5 18.5" fill="none" stroke="var(--green)" stroke-width="1.1" opacity="0.55"/>
+        <circle cx="12.8" cy="14.2" r="2.6" fill="var(--cyan)"/>
+      </svg>
+      <span data-i18n="shell.home">outils-parcelles</span>
+    </a>
+    <div class="header-tools">
+      <div class="seg" role="group" aria-label="Language / Langue">
+        <button type="button" data-lang-btn="fr" lang="fr">FR</button>
+        <button type="button" data-lang-btn="en" lang="en">EN</button>
+      </div>
+      <button type="button" class="chip-btn" data-theme-btn data-i18n-attr="aria-label:shell.theme;title:shell.theme">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5 A6.5 6.5 0 0 1 8 14.5 Z" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </header>
+  <div class="tabbar">
+    <div class="tablist" role="tablist" id="tabs" data-i18n-attr="aria-label:tabs.label"></div>
+  </div>
+  <div class="strata" aria-hidden="true"></div>
+  <main id="panels">
+    <noscript><p>This tool needs JavaScript. / Cet outil nécessite JavaScript.</p></noscript>
+  </main>
+  <footer class="site-footer"><p data-i18n="footer"></p></footer>
+</body>
+</html>

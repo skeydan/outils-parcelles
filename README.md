@@ -1,0 +1,263 @@
+# outils-parcelles
+
+Look up several French cadastre parcels at once: choose a commune, paste a
+list of section + number references, and see each parcel on an
+OpenStreetMap map with every attribute the open cadastre publishes — the
+area in m² and in hectares / ares / centiares (`1 ha 07 a 00 ca`).
+
+Static site, one page, no backend, no build step, no account, no key, no
+tracking, no cookies. French and English, light and dark, keyboard and
+phone. The URL carries the state, so a result is shareable and bookmarkable.
+
+```
+#/parcels?c=11296&p=B590%2CB593%2CB1137
+```
+
+## Run it
+
+```sh
+npm run serve          # python3 -m http.server 9437 --directory site
+open http://localhost:9437/
+```
+
+Open `site/index.html` through a static server, not with `file://`: ES
+modules and `fetch` need HTTP.
+
+```sh
+npm test               # pure logic, no network
+npm run e2e            # browser checks; needs Playwright + chromium
+```
+
+`npm run e2e` starts no server of its own; run `npm run serve` first, then
+`BASE=http://localhost:9437 node scripts/e2e.mjs`. It writes screenshots to
+`/tmp/parcelles-shots`. The tool is also a normal Docker static site:
+`docker build -t outils-parcelles .`.
+
+## Input
+
+One reference per line, or separated by commas or semicolons. Case, accents
+and common separators do not matter.
+
+| Input | Meaning |
+| --- | --- |
+| `B 590`, `B590`, `B-590`, `B.590`, `b_0590` | section + number |
+| `0590`, `590` | number only; matched across the commune's sections |
+| `000 B 590`, `001B590` | prefix + section + number |
+| `11296 B 590`, `11296B590` | INSEE + section + number (the commune is checked) |
+| `112960000B0590` | full parcel id (14 characters: INSEE + 3-digit prefix + 2-character section + 4-digit number) |
+
+A full id from the data contains the section **zero-padded** (`0B`), while
+the GeoJSON `section` property is `B`; both are accepted and normalized.
+Numbers are compared without leading zeros (`0002` = `2`). Duplicates are
+dropped. The limit is 100 references per lookup.
+
+If no commune is selected yet but every reference carries the same INSEE
+code, that commune is used. References from two communes in the same list
+are refused with an explicit message. Lines that cannot be read are listed
+one by one, with the reason, and never guessed.
+
+Paris, Lyon and Marseille are published by arrondissement (`75101`,
+`69381`, `13201`, …), not under `75056`, `69123`, `13055`. A 404 on those
+codes says so and gives a worked example.
+
+## What it shows
+
+For each found parcel:
+
+| Field | Meaning |
+| --- | --- |
+| `id` | parcel id, e.g. `112960000B0590` |
+| `commune` | INSEE code of the commune |
+| `prefixe` | 3-digit prefix (usually `000`) |
+| `section` | section letter(s), `A`, `B`, `AB`, … |
+| `numero` | parcel number |
+| `contenance` | cadastral area in m², shown also as ha / a / ca |
+| `arpente` | `true` when the area comes from a survey (`document d'arpentage`), not the fiscal plan |
+| `created`, `updated` | dates carried by the source file |
+| geometry | Polygon or MultiPolygon, WGS84 (longitude, latitude) |
+
+The area is the cadastre's **contenance**, not a calculation from the
+drawn geometry. `1 ha = 10 000 m²`, `1 a = 100 m²`, `1 ca = 1 m²`.
+
+The open data has **no owner name, no postal address and no tax value**.
+Those layers are not published; the tool says so in each parcel's detail
+row and in the "what the open data contains" section, and does not invent
+them.
+
+## Data source and licence
+
+The parcels come from **etalab-cadastre**, the consolidated cadastre
+dataset published by **Etalab** on
+[cadastre.data.gouv.fr](https://cadastre.data.gouv.fr/datasets/cadastre-etalab),
+built from the **DGFiP** *Plan Cadastral Informatisé* (PCI) vecteur.
+
+- Licence: **Licence Ouverte / Open Licence 2.0 (Etalab)**, licence code
+  `fr-lo` on data.gouv.fr. Reuse, including commercial reuse, is allowed
+  with attribution. The app states the licence and links the dataset.
+- Provenance: DGFiP PCI, parsed and consolidated by Etalab. The Etalab
+  version keeps the parcel division and buildings and leaves out the
+  fiscal and decorative elements of the full EDIGÉO product.
+
+The advertised per-commune file is:
+
+```
+https://cadastre.data.gouv.fr/data/etalab-cadastre/latest/geojson/communes/{dep}/{insee}/cadastre-{insee}-{layer}.json.gz
+```
+
+`{dep}` is the first two characters of the INSEE code, or the first three
+for overseas departments (971–976); Corsica uses `2A`/`2B`. `latest`
+redirects to the current dated edition in the public OVH S3 bucket.
+
+### Why the app fetches through the bundler
+
+The `latest/...json.gz` URL answers with a **302 to the S3 bucket, and that
+302 has no `Access-Control-Allow-Origin` header**. A browser therefore
+blocks the cross-origin fetch before following the redirect (curl follows
+it happily, which makes the problem easy to miss). The app uses Etalab's
+official, documented **cadastre-bundler-api** on the same host instead:
+
+```
+https://cadastre.data.gouv.fr/bundler/cadastre-etalab/communes/{insee}/geojson/{layer}
+```
+
+It returns the same per-commune GeoJSON with CORS, no key and no account.
+The OpenAPI definition is in
+[`datagouv/cadastre-bundler-api`](https://github.com/datagouv/cadastre-bundler-api)
+(`/cadastre-etalab/communes/{codeCommune}/{format}/{layer}`, formats
+`geojson`, `geojson-gz`, `shp`). The S3 bucket still sends
+`Access-Control-Allow-Origin: *`; its public listing is used once to read
+the current edition date (`2026-09-01` at the time of writing). If that
+cosmetic request fails, the tool still works and simply omits the edition.
+
+The "open this commune's parcel file" link points at the advertised
+`.json.gz` download, so a reader can fetch the exact dated object by hand.
+
+## Commune name → INSEE code
+
+The smallest correct reference is used, on demand and cached in memory:
+
+1. **Name search**: `geo.api.gouv.fr/communes?nom=…` returns a few KB with
+   the name, 5-character INSEE code, department and postal codes. It is the
+   official French administrative API (Etalab), free, no key, CORS open.
+   Requests are debounced (250 ms), aborted when superseded, and cached by
+   normalized name.
+2. **Manual fallback**: type the INSEE code directly. This works when the
+   search API is down and for communes whose name is ambiguous.
+3. **Official name and outline**: one per-commune `communes` layer (about
+   3 KB gzipped for 11296) gives the spelling used in the table and the
+   dashed commune outline; it also provides the fallback zoom when none of
+   the requested parcels is found.
+
+Measured alternatives, rejected because they are too large for a static
+page that must stay light (sizes gzipped, measured 2026-11-24):
+
+- France-wide communes file: ~234 MB.
+- One department's communes file (Aude, 11): ~2.1 MB of geometry.
+- One commune's outline: ~3.3 KB; one commune's parcels (11296): ~228 KB,
+  2 422 features.
+
+Nothing is bundled: every reference is fetched on demand. The parcel file
+is cached per commune in memory for the life of the page (a promise cache
+deduplicates concurrent requests; failures are evicted so a retry works).
+
+## Map
+
+[Leaflet](https://leafletjs.com/) 1.9.4, **vendored** in
+`site/vendor/leaflet/` (JS, CSS, marker images and the BSD-2-Clause
+licence). Reasons:
+
+- the shell must work offline; a CDN script would fail with the rest of the
+  network, and a third-party origin would need a wider CSP;
+- no supply-chain surprise from a moving CDN version;
+- the whole app, map library included, is served by the same static host
+  and the CSP can keep `script-src 'self'`.
+
+The basemap is the OpenStreetMap standard tile layer
+(`https://tile.openstreetmap.org/{z}/{x}/{y}.png`), with the visible
+attribution **© OpenStreetMap contributors** and Leaflet. OSM data is under
+the ODbL and the tiles under the OSM Foundation tile usage policy; this is
+a low-volume personal tool. Tiles are the only map resource that needs the
+network: if they fail, the parcel outlines and the table still work and a
+note says the basemap could not load.
+
+Each found parcel gets a distinct colour, a permanent section/number label
+(switchable), a click popup with section, number, m², ha/a/ca, `arpente`
+and the full id, and a legend button that zooms to it. The map fits the
+found parcels; when none is found it fits the commune outline. The detail
+row shows every source property and links the source file.
+
+## URL state
+
+Only non-default state is written, canonicalized with `URLSearchParams`:
+
+- `c` — commune INSEE code;
+- `p` — comma-separated canonical references (`B590`, `001B12`, …).
+
+Examples:
+
+```
+#/parcels
+#/parcels?c=11296
+#/parcels?c=11296&p=B590%2CB593%2CB1137
+```
+
+The hash router is `#/<tab>?<state>`. Unknown routes and untidy hashes fall
+back to the parcels tab and are rewritten. Opening a result URL loads the
+commune and the parcels immediately. `?lang=fr` / `?lang=en` is read before
+the saved language and the browser preference; the FR/EN switch keeps the
+route. Theme follows the system, with a switch; only the language and
+theme choices are stored in `localStorage`.
+
+## Files
+
+```
+site/index.html                  shell, tab bar, footer
+site/app/main.js                 ARIA tabs, hash routing, tab module loader
+site/app/router.js               pure hash parser/formatter
+site/app/tabs.js                 tab registry (one tab: parcels)
+site/assets/site.js              language + theme shell
+site/assets/ui.js                DOM helpers, numbered citations
+site/assets/site.css             shell styles
+site/tabs/parcels/js/app.js      the tool: commune search, run, map, table
+site/tabs/parcels/js/parcel-id.js  flexible reference parsing + matching
+site/tabs/parcels/js/units.js    m² ↔ ha/a/ca
+site/tabs/parcels/js/commune.js  INSEE, URLs, geo API parsing, edition
+site/tabs/parcels/js/cadastre.js fetch + decompress + cache
+site/tabs/parcels/js/geo.js      colours and bounding boxes
+site/tabs/parcels/js/sources.js  the cited sources
+site/tabs/parcels/css/parcels.css
+site/vendor/leaflet/             Leaflet 1.9.4 + licence
+tests/*.test.mjs                 node:test, pure functions only
+scripts/e2e.mjs                  Playwright, real endpoint, screenshots
+deploy/default.conf.template     nginx + CSP for the data sources and tiles
+```
+
+## Tests
+
+`npm test` runs `node --test tests/*.test.mjs` with no network:
+
+- parcel references: every accepted format, invalid lines, other-commune
+  errors, full ids with a zero-padded section, number normalization,
+  duplicate removal, section/number/prefix matching, ambiguity, the
+  100-parcel limit;
+- units: m² → ha/a/ca, locale separators, missing areas, totals;
+- commune: INSEE validation, department extraction (overseas, Corsica),
+  download and bundler URLs, geo API URL and response, outline name,
+  arrondissement hints, edition parsing;
+- map helpers: distinct colours, bounding boxes;
+- router: round-trip, canonical form, anchors, fallbacks, tab keys, tab
+  registry, vendored Leaflet files.
+
+`npm run e2e` drives Chromium against the real cadastre endpoint (commune
+11296, parcels B 590, B 593, B 1137 and a missing B 9999): table values in
+m² and ha/a/ca, total, not-found report, popup, detail row, shareable URL,
+commune search by name, 404 and offline errors, language/theme, phone tab
+targets, no horizontal overflow and no console errors. The two negative
+scenarios (deliberate 404, deliberately blocked network) allow the browser's
+own resource-error messages; uncaught page errors still fail the run.
+
+## Licence
+
+Code and texts: MIT (`LICENSE`). Data: Licence Ouverte 2.0 (Etalab).
+OpenStreetMap data: ODbL. Leaflet: BSD-2-Clause. The cited sources are
+listed at the bottom of the tool with links.
