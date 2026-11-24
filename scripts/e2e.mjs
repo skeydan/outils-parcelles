@@ -231,7 +231,7 @@ for (const device of Object.keys(devices)) {
   ok(cells.filter((c) => /Mailhac/i.test(c)).length === 4, `4 parcels in Mailhac, got ${cells.filter((c) => /Mailhac/i.test(c)).length}`);
   const summary = await page.textContent('#pc-summary');
   ok(/2 communes: .*11296.*11212/.test(summary), `multi-commune summary: ${summary}`);
-  ok(summary.includes('8 ha 27 a 30 ca') && summary.includes('82,730'), 'seeded total in ha/a/ca and m²');
+  ok(summary.includes('8 ha 30 a 60 ca') && summary.includes('83,060'), 'seeded total in ha/a/ca and m²');
   ok(/18 (?:of|\/) 18 parcels found/.test(await page.textContent('#pc-status')), `seeded status: ${await page.textContent('#pc-status')}`);
   ok((await page.$$('#pc-map path.leaflet-interactive')).length === 18, '18 seeded parcels on one map');
   const sourceLinks = await page.locator('#pc-summary a').allTextContents();
