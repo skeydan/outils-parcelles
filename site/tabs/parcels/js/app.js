@@ -2,7 +2,7 @@
 // draw them on an OpenStreetMap map and show every attribute the open
 // cadastre publishes, with the area in m² and in ha/a/ca. Mounted by the
 // one-page shell (site/app/main.js); the state is kept in the route
-// (#/parcels?c=11296&p=B11,B1).
+// (#/parcels?c=11296&p=B11,B1 or #/parcels?p=11296-B11,11212-B3).
 import { lang } from '../../../assets/site.js';
 import { h, citer } from '../../../assets/ui.js';
 import { SOURCES } from './sources.js';
@@ -37,26 +37,43 @@ import {
   BadFileError,
 } from './cadastre.js';
 import { bboxOfGeoJSON, parcelColor } from './geo.js';
+import {
+  MAX_SELECTION,
+  parseSelectionJson,
+  serializeSelection,
+  formatEntryLine,
+  groupByCommune,
+  resolveItems,
+  formatSelectionParam,
+  parseSelectionParam,
+  exportFilename,
+  readStoredSelection,
+  writeStoredSelection,
+  clearStoredSelection,
+} from './selection.js';
 
 const T = (en, fr) => (lang() === 'fr' ? fr : en);
 const tr = (o) => o?.[lang()] ?? o?.en ?? '';
 const { cite, list: sourceList } = citer(SOURCES, 'p-');
 const LEAFLET_JS = new URL('../../../vendor/leaflet/leaflet.js', import.meta.url).href;
+const SEED_URL = new URL('../../../examples/pouzols-mailhac.json', import.meta.url).href;
 const OSM_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
 let ctx = null;
 const els = {};
 const state = {
-  commune: null, // {insee, name, dep}
+  commune: null, // active commune for bare references: {insee, name, dep}
   input: '',
-  lastTokens: [],
+  entries: [], // resolved references {insee, section, numero, …} of the last run
+  selectionNom: '',
+  importErrors: [],
   result: null,
   loading: false,
   loadingName: '',
+  loadingCount: 1,
   parseErrors: [],
   errorInfo: null,
-  sig: '',
   paramsRaw: '',
   // map
   map: null,
@@ -70,7 +87,7 @@ const state = {
   tileWarned: false,
   // commune search
   search: { q: '', items: [], active: -1, open: false, loading: false, error: null, token: 0 },
-  outline: null,
+  preview: null, // {insee, name, outline} of the active commune before a run
   outlineToken: 0,
   runToken: 0,
   mapToken: 0,
@@ -87,7 +104,8 @@ const fact = (term, body) => [h('dt', { text: term }), h('dd', {}, ...body)];
 
 function communeName() {
   if (!state.commune) return '';
-  return state.commune.name || nameFromOutline(state.outline?.data) || state.commune.insee;
+  const previewed = state.preview?.insee === state.commune.insee ? state.preview.name : null;
+  return state.commune.name || previewed || nameFromOutline(state.preview?.outline?.data) || state.commune.insee;
 }
 
 function communeLabel() {
@@ -95,9 +113,18 @@ function communeLabel() {
   return `${communeName()} (${state.commune.insee})`;
 }
 
+/** Human name of one group of a multi-commune result. */
+function groupName(group) {
+  return group?.name || group?.insee || '';
+}
+
 function loadingText() {
+  const detail = T('The compressed file can be several MB; it is fetched once per commune and kept in memory.', 'Le fichier compressé peut peser plusieurs Mo ; il est téléchargé une fois par commune et gardé en mémoire.');
+  if (state.loadingCount > 1) {
+    return `${T('Loading the cadastre for', 'Chargement du cadastre de')} ${state.loadingCount} ${T('communes', 'communes')}… ${detail}`;
+  }
   const name = state.loadingName || T('this commune', 'cette commune');
-  return `${T('Loading the cadastre for', 'Chargement du cadastre de')} ${name}… ${T('The compressed file can be several MB; it is fetched once per commune and kept in memory.', 'Le fichier compressé peut peser plusieurs Mo ; il est téléchargé une fois par commune et gardé en mémoire.')}`;
+  return `${T('Loading the cadastre for', 'Chargement du cadastre de')} ${name}… ${detail}`;
 }
 
 function setStatus(text) {
@@ -166,8 +193,13 @@ function errorMessage(info) {
       return T('Choose a commune first.', 'Choisissez d’abord une commune.');
     case 'empty':
       return T(
-        'Enter at least one parcel reference (for example B 590).',
-        'Saisissez au moins une référence de parcelle (par exemple B 590).',
+        'Enter at least one parcel reference (for example B 590) or import a JSON file.',
+        'Saisissez au moins une référence de parcelle (par exemple B 590) ou importez un fichier JSON.',
+      );
+    case 'import-empty':
+      return T(
+        'The imported file has no valid parcel. See the reported problems above.',
+        'Le fichier importé ne contient aucune parcelle valide. Voir les problèmes signalés ci-dessus.',
       );
     case 'all-unreadable':
       return T(
@@ -298,10 +330,10 @@ function clearParcelLayers() {
   renderLegend();
 }
 
-function popupContent(feature) {
+function popupContent(feature, entry) {
   const p = feature.properties ?? {};
   const rows = [
-    [T('Commune', 'Commune'), communeName()],
+    [T('Commune', 'Commune'), `${entry?.commune ?? ''} (${entry?.insee ?? p.commune ?? ''})`.trim()],
     [T('Area', 'Surface'), `${formatM2(p.contenance, lang())} m² · ${formatHaCa(p.contenance)}`],
     [T('Surveyed', 'Arpentée'), p.arpente ? T('Yes', 'Oui') : T('No', 'Non')],
     [T('Parcel ID', 'Identifiant'), String(p.id ?? '')],
@@ -317,26 +349,32 @@ function popupContent(feature) {
 
 function drawLayers() {
   const L = state.L;
-  const map = state.map;
   state.groups.outline.clearLayers();
   state.groups.casing.clearLayers();
   state.groups.parcels.clearLayers();
   state.layers = [];
 
   let communeBounds = null;
-  const outline = state.outline?.data;
-  if (outline) {
-    const layer = L.geoJSON(outline, {
+  const addOutline = (data) => {
+    if (!data) return;
+    const layer = L.geoJSON(data, {
       style: { color: '#3b4a44', weight: 2, opacity: 0.85, dashArray: '6 6', fill: false },
       interactive: false,
     });
     state.groups.outline.addLayer(layer);
-    if (layer.getBounds().isValid()) communeBounds = layer.getBounds();
+    if (layer.getBounds().isValid()) {
+      communeBounds = communeBounds ? communeBounds.extend(layer.getBounds()) : layer.getBounds();
+    }
+  };
+  if (state.result) {
+    for (const group of state.result.groups) addOutline(group.outline?.data);
+  } else if (state.preview?.outline?.data) {
+    addOutline(state.preview.outline.data);
   }
 
   const parcels = state.result?.found ?? [];
   const foundBounds = L.latLngBounds([]);
-  parcels.forEach(({ feature }, i) => {
+  parcels.forEach(({ feature, entry }, i) => {
     const color = parcelColor(i);
     const casing = L.geoJSON(feature, {
       style: { color: '#ffffff', weight: 7, opacity: 0.85, fill: false },
@@ -345,7 +383,7 @@ function drawLayers() {
     const layer = L.geoJSON(feature, {
       style: { color, weight: 2.5, opacity: 1, fillColor: color, fillOpacity: 0.32 },
     });
-    layer.bindPopup(popupContent(feature), { minWidth: 220, maxWidth: 320, autoPanPadding: [24, 24] });
+    layer.bindPopup(popupContent(feature, entry), { minWidth: 220, maxWidth: 320, autoPanPadding: [24, 24] });
     if (state.labels) {
       const p = feature.properties ?? {};
       layer.bindTooltip(`${p.section ?? ''} ${p.numero ?? ''}`.trim(), {
@@ -363,8 +401,9 @@ function drawLayers() {
     if (layer.getBounds().isValid()) foundBounds.extend(layer.getBounds());
   });
 
-  if (!communeBounds && state.result?.features?.length) {
-    const bbox = bboxOfGeoJSON({ type: 'FeatureCollection', features: state.result.features });
+  if (!communeBounds && state.result?.requested?.length) {
+    const features = state.result.groups.flatMap((g) => g.features ?? []);
+    const bbox = bboxOfGeoJSON({ type: 'FeatureCollection', features });
     if (bbox) communeBounds = L.latLngBounds(bbox);
   }
   return { foundBounds: foundBounds.isValid() ? foundBounds : null, communeBounds };
@@ -380,26 +419,27 @@ function renderLegend() {
   }
   els.legend.hidden = false;
   els.legend.setAttribute('aria-label', T('Parcels on the map', 'Parcelles sur la carte'));
-  els.legend.replaceChildren(...found.map(({ feature }, i) => {
+  els.legend.replaceChildren(...found.map(({ feature, entry }, i) => {
     const p = feature.properties ?? {};
     const item = {
       section: String(p.section ?? '').toUpperCase() || null,
       numero: normalizeNumero(p.numero) ?? String(p.numero ?? ''),
       prefixe: p.prefixe ?? '000',
     };
+    const label = refText(item, lang());
     return h('button', {
       type: 'button',
       class: 'pc-legend-chip',
-      title: T('Show on the map', 'Voir sur la carte'),
+      title: `${T('Show on the map', 'Voir sur la carte')} — ${label} (${entry?.commune ?? entry?.insee ?? ''})`,
       onclick: () => focusParcel(i),
     }, h('span', { class: 'pc-swatch', 'aria-hidden': 'true', style: `--pc-c:${parcelColor(i)}` }),
-    h('span', { text: refText(item, lang()) }));
+    h('span', { text: label }));
   }));
 }
 
 async function renderMap({ fit = false, restoreView = false } = {}) {
   const token = ++state.mapToken;
-  if (!state.result && !state.outline) {
+  if (!state.result && !state.preview?.outline) {
     showMapPlaceholder();
     return;
   }
@@ -453,14 +493,20 @@ function fitCommune() {
   if (!state.map) return;
   const L = state.L;
   let bounds = null;
-  const outline = state.outline?.data;
-  if (outline) {
-    const layer = L.geoJSON(outline);
-    if (layer.getBounds().isValid()) bounds = layer.getBounds();
-  }
-  if (!bounds && state.result?.features?.length) {
-    const bbox = bboxOfGeoJSON({ type: 'FeatureCollection', features: state.result.features });
-    if (bbox) bounds = L.latLngBounds(bbox);
+  const add = (data) => {
+    if (!data) return;
+    const layer = L.geoJSON(data);
+    if (layer.getBounds().isValid()) bounds = bounds ? bounds.extend(layer.getBounds()) : layer.getBounds();
+  };
+  if (state.result) {
+    for (const group of state.result.groups) add(group.outline?.data);
+    if (!bounds && state.result.groups.some((g) => g.features?.length)) {
+      const features = state.result.groups.flatMap((g) => g.features ?? []);
+      const bbox = bboxOfGeoJSON({ type: 'FeatureCollection', features });
+      if (bbox) bounds = L.latLngBounds(bbox);
+    }
+  } else if (state.preview?.outline?.data) {
+    add(state.preview.outline.data);
   }
   if (bounds) state.map.fitBounds(bounds, { padding: [28, 28], maxZoom: 18 });
 }
@@ -630,14 +676,16 @@ function applyCommune(commune) {
   if (state.searchTimer) clearTimeout(state.searchTimer);
   state.searchAbort?.abort();
   state.commune = commune;
-  state.outline = null;
+  state.preview = null;
   state.result = null;
-  state.lastTokens = [];
+  state.entries = [];
+  state.importErrors = [];
   state.parseErrors = [];
   state.errorInfo = null;
   state.view = null;
   state.loading = false;
   state.loadingName = '';
+  state.loadingCount = 1;
   state.runToken += 1;
   state.outlineToken += 1;
   state.search.items = [];
@@ -646,6 +694,7 @@ function applyCommune(commune) {
   state.search.error = null;
   state.search.loading = false;
   renderSearch();
+  renderImportErrors();
   renderCommune();
   renderParseErrors();
   renderError();
@@ -662,12 +711,15 @@ function clearCommune() {
   if (state.searchTimer) clearTimeout(state.searchTimer);
   state.searchAbort?.abort();
   state.commune = null;
-  state.outline = null;
+  state.preview = null;
   state.result = null;
-  state.lastTokens = [];
+  state.entries = [];
+  state.importErrors = [];
   state.parseErrors = [];
   state.errorInfo = null;
   state.loading = false;
+  state.loadingName = '';
+  state.loadingCount = 1;
   state.runToken += 1;
   state.outlineToken += 1;
   state.search = { q: '', items: [], active: -1, open: false, loading: false, error: null, token: state.search.token + 1 };
@@ -676,6 +728,7 @@ function clearCommune() {
   state.view = null;
   if (els.search) els.search.value = '';
   renderSearch();
+  renderImportErrors();
   renderCommune();
   renderParseErrors();
   renderError();
@@ -688,19 +741,142 @@ function clearCommune() {
 
 function clearParcels() {
   state.input = '';
-  state.lastTokens = [];
+  state.entries = [];
+  state.selectionNom = '';
+  state.importErrors = [];
   state.result = null;
   state.parseErrors = [];
   state.errorInfo = null;
   state.loading = false;
+  state.loadingCount = 1;
   state.runToken += 1;
   if (els.input) els.input.value = '';
+  if (els.selectionName) els.selectionName.value = '';
+  clearStoredSelection();
+  renderImportErrors();
   renderParseErrors();
   renderError();
   renderStatus();
   renderResults();
   clearParcelLayers();
   writeRoute();
+  if (state.preview) void renderMap({ fit: true });
+  else showMapPlaceholder();
+}
+
+// ---------------------------------------------------------------- import / export
+function defaultSelectionName(entries) {
+  return [...new Set(entries.map((entry) => entry.insee))].join(' + ');
+}
+
+/** Resolve the textarea without running or rendering a result. */
+function entriesFromInput() {
+  const parsed = parseParcelList(state.input);
+  const resolved = resolveItems(parsed.items, state.commune?.insee ?? null);
+  return { items: resolved.items, errors: [...parsed.errors, ...resolved.errors] };
+}
+
+/** Save the current selection in localStorage (never sent anywhere). */
+function saveSelection() {
+  if (!state.entries.length) return;
+  writeStoredSelection(serializeSelection({ nom: state.selectionNom, entries: state.entries }));
+}
+
+function downloadSelection() {
+  const { items, errors } = entriesFromInput();
+  state.parseErrors = errors;
+  renderParseErrors();
+  if (!items.length) {
+    setError({ kind: errors.length ? 'all-unreadable' : 'empty' });
+    renderStatus();
+    return;
+  }
+  const typed = els.selectionName ? els.selectionName.value.trim() : state.selectionNom;
+  const nom = typed || defaultSelectionName(items);
+  state.selectionNom = typed;
+  if (els.selectionName) els.selectionName.value = typed;
+  const text = serializeSelection({ nom, entries: items });
+  writeStoredSelection(text);
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const link = h('a', { href: url, download: exportFilename(nom) });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * Load a JSON selection into the form and run it. Valid entries are kept even
+ * when other entries are malformed; every problem is reported above the run
+ * button and in the not-found report.
+ */
+function importText(text) {
+  const parsed = parseSelectionJson(text);
+  const errors = [...parsed.errors];
+  if (!parsed.ok && !errors.length) errors.push({ index: null, code: 'no-entries' });
+  state.importErrors = errors;
+  renderImportErrors();
+  if (!parsed.ok) {
+    state.result = null;
+    state.loading = false;
+    renderResults();
+    setError({ kind: 'import-empty' });
+    renderStatus();
+    return false;
+  }
+
+  state.selectionNom = parsed.nom;
+  if (els.selectionName) els.selectionName.value = parsed.nom;
+  state.input = parsed.entries.map(formatEntryLine).join('\n');
+  if (els.input) els.input.value = state.input;
+  const codes = [...new Set(parsed.entries.map((entry) => entry.insee))];
+  state.commune = codes.length === 1
+    ? { insee: codes[0], name: null, dep: departmentOf(codes[0]) }
+    : null;
+  state.search.q = '';
+  if (els.search) els.search.value = '';
+  state.preview = null;
+  state.result = null;
+  state.entries = parsed.entries.map((entry) => ({ ...entry, prefixe: '000', hasPrefixe: false }));
+  state.parseErrors = [];
+  state.errorInfo = null;
+  state.loading = false;
+  state.loadingCount = 1;
+  state.view = null;
+  state.runToken += 1;
+  state.outlineToken += 1;
+  writeStoredSelection(serializeSelection({ nom: parsed.nom, entries: parsed.entries }));
+  renderCommune();
+  renderSearch();
+  renderParseErrors();
+  renderError();
+  renderStatus();
+  renderResults();
+  clearParcelLayers();
+  if (els.legend) els.legend.hidden = true;
+  state.groups?.outline.clearLayers();
+  writeRoute();
+  void run();
+  return true;
+}
+
+function importFile(file) {
+  if (!file) return;
+  file.text().then((text) => importText(text)).catch(() => {
+    state.importErrors = [{ index: null, code: 'bad-json' }];
+    renderImportErrors();
+    setError({ kind: 'import-empty' });
+  });
+}
+
+async function loadSeed() {
+  try {
+    const response = await fetch(SEED_URL, { cache: 'no-cache' });
+    if (!response.ok) return false;
+    return importText(await response.text());
+  } catch {
+    return false;
+  }
 }
 
 function renderCommune() {
@@ -735,13 +911,11 @@ async function previewCommune({ quiet = false } = {}) {
   try {
     const res = await fetchCommuneOutline(commune.insee);
     if (token !== state.outlineToken || state.commune?.insee !== commune.insee) return;
-    state.outline = res;
-    if (!state.commune.name) {
-      const name = nameFromOutline(res.data);
-      if (name) {
-        state.commune.name = name;
-        if (!state.search.q) state.search.q = name;
-      }
+    const name = nameFromOutline(res.data);
+    state.preview = { insee: commune.insee, name, outline: res };
+    if (!state.commune.name && name) {
+      state.commune.name = name;
+      if (!state.search.q) state.search.q = name;
     }
     renderCommune();
     if (!state.loading) {
@@ -761,47 +935,36 @@ async function run() {
   state.input = els.input.value;
   state.errorInfo = null;
   renderError();
-  const parsed = parseParcelList(state.input, { commune: state.commune });
-  state.parseErrors = parsed.errors;
+  const parsed = parseParcelList(state.input);
+  const resolved = resolveItems(parsed.items, state.commune?.insee ?? null);
+  state.parseErrors = [...parsed.errors, ...resolved.errors];
   renderParseErrors();
-  const items = parsed.items;
+  const items = resolved.items;
 
   if (!items.length) {
-    setError({ kind: parsed.errors.length ? 'all-unreadable' : 'empty' });
+    setError({ kind: state.parseErrors.length ? 'all-unreadable' : 'empty' });
     renderStatus();
     return;
   }
-  if (items.length > MAX_PARCELS) {
+  if (items.length > MAX_SELECTION) {
     setError({ kind: 'too-many', count: items.length });
     renderStatus();
     return;
   }
 
-  if (!state.commune) {
-    const codes = [...new Set(items.map((item) => item.insee).filter(Boolean))];
-    if (codes.length > 1) {
-      setError({ kind: 'mixed', codes });
-      renderStatus();
-      return;
-    }
-    if (codes.length === 1) {
-      state.commune = { insee: codes[0], name: null, dep: departmentOf(codes[0]) };
-      state.search.q = '';
-      renderCommune();
-      void previewCommune({ quiet: true });
-    } else {
-      setError({ kind: 'no-commune' });
-      renderStatus();
-      return;
-    }
+  const groups = groupByCommune(items);
+  if (!state.commune && groups.length === 1) {
+    state.commune = { insee: groups[0].insee, name: null, dep: departmentOf(groups[0].insee) };
+    state.search.q = '';
+    renderCommune();
+    void previewCommune({ quiet: true });
   }
 
-  const insee = state.commune.insee;
-  const name = communeName();
-  state.lastTokens = items.map(canonicalToken);
+  state.entries = items;
   state.result = null;
   state.loading = true;
-  state.loadingName = name;
+  state.loadingCount = groups.length;
+  state.loadingName = groups.length === 1 ? (state.commune?.name || groups[0].insee) : '';
   state.runToken += 1;
   const token = state.runToken;
   state.errorInfo = null;
@@ -809,54 +972,97 @@ async function run() {
   renderStatus();
   renderResults();
   clearParcelLayers();
-  if (state.outline) void renderMap({ fit: false, restoreView: true });
+  if (state.preview) void renderMap({ fit: false, restoreView: true });
   writeRoute();
 
-  const outlinePromise = fetchCommuneOutline(insee).catch(() => null);
   const editionPromise = fetchLatestEdition().catch(() => null);
-  let res;
-  try {
-    res = await fetchParcels(insee);
-  } catch (error) {
-    if (token !== state.runToken) return;
+  const settled = await Promise.all(groups.map(async (group) => {
+    const outlinePromise = fetchCommuneOutline(group.insee).catch(() => null);
+    let parcels = null;
+    let error = null;
+    try {
+      parcels = await fetchParcels(group.insee);
+    } catch (err) {
+      error = fetchErrorInfo(err, group.insee);
+    }
+    const outline = await outlinePromise;
+    const name = nameFromOutline(outline?.data) || group.insee;
+    if (parcels) {
+      const features = Array.isArray(parcels.data?.features) ? parcels.data.features : [];
+      const index = indexParcels(features);
+      const matched = matchParcels(group.items, index);
+      return {
+        insee: group.insee,
+        name,
+        items: group.items,
+        outline,
+        features,
+        index,
+        error: null,
+        found: matched.found.map((hit) => ({
+          ...hit,
+          entry: { ...hit.item, commune: name },
+          commune: name,
+        })),
+        notFound: matched.notFound.map((miss) => ({
+          ...miss,
+          item: { ...miss.item, commune: name },
+          commune: name,
+        })),
+        sourceUrl: parcelUrl(group.insee),
+        directoryUrl: communeDirectoryUrl(group.insee),
+        edition: parcels.edition || outline?.edition || null,
+      };
+    }
+    return {
+      insee: group.insee,
+      name,
+      items: group.items,
+      outline,
+      features: [],
+      index: { features: [], byFull: new Map(), bySectionNum: new Map(), byNum: new Map(), sections: [] },
+      error,
+      found: [],
+      notFound: [],
+      sourceUrl: parcelUrl(group.insee),
+      directoryUrl: communeDirectoryUrl(group.insee),
+      edition: outline?.edition || null,
+    };
+  }));
+  const latestEdition = await editionPromise;
+  if (token !== state.runToken) return;
+
+  const okGroups = settled.filter((group) => !group.error);
+  const failed = settled.filter((group) => group.error);
+  if (!okGroups.length) {
     state.loading = false;
     state.result = null;
     renderStatus();
     renderResults();
-    setError(fetchErrorInfo(error, insee));
+    setError(failed[0]?.error ?? { kind: 'network' });
     clearParcelLayers();
     return;
   }
-  if (token !== state.runToken) return;
 
-  const features = Array.isArray(res.data?.features) ? res.data.features : [];
-  const index = indexParcels(features);
-  const { found, notFound } = matchParcels(items, index);
-  const outline = await outlinePromise;
-  const latestEdition = await editionPromise;
-  if (token !== state.runToken) return;
-  if (outline) {
-    state.outline = outline;
-    if (!state.commune.name) {
-      const official = nameFromOutline(outline.data);
-      if (official) {
-        state.commune.name = official;
-        if (!state.search.q) state.search.q = official;
-      }
+  const found = okGroups.flatMap((group) => group.found);
+  const notFound = okGroups.flatMap((group) => group.notFound);
+  if (state.commune) {
+    const mine = settled.find((group) => group.insee === state.commune.insee);
+    if (mine?.name) {
+      state.commune.name = mine.name;
+      if (!state.search.q) state.search.q = mine.name;
     }
   }
   state.result = {
-    insee,
-    edition: res.edition || outline?.edition || latestEdition || null,
-    sourceUrl: parcelUrl(insee),
-    directoryUrl: communeDirectoryUrl(insee),
+    nom: state.selectionNom,
+    edition: settled.find((group) => group.edition)?.edition || latestEdition || null,
     requested: items,
-    features,
-    index,
+    groups: settled,
     found,
     notFound,
   };
   state.loading = false;
+  saveSelection();
   renderStatus();
   renderCommune();
   renderResults();
@@ -877,6 +1083,11 @@ function renderParseErrors() {
       let reason;
       if (error.code === 'bad-numero') {
         reason = T('the number must be from 1 to 9999.', 'le numéro doit aller de 1 à 9999.');
+      } else if (error.code === 'no-commune') {
+        reason = T(
+          'this line has no commune: select one above or start the line with its INSEE code.',
+          'cette ligne n’a pas de commune : sélectionnez-en une ci-dessus ou commencez la ligne par son code INSEE.',
+        );
       } else if (error.code === 'other-commune') {
         reason = T(
           `this line names commune ${error.insee}, but ${error.expected} is selected.`,
@@ -892,7 +1103,7 @@ function renderParseErrors() {
     }))));
 }
 
-function fieldValue(feature) {
+function fieldValue(feature, entry) {
   const p = feature.properties ?? {};
   const ordered = ['id', 'commune', 'prefixe', 'section', 'numero', 'contenance', 'arpente', 'created', 'updated'];
   const keys = [...ordered.filter((key) => key in p), ...Object.keys(p).filter((key) => !ordered.includes(key)).sort()];
@@ -910,7 +1121,7 @@ function fieldValue(feature) {
   return keys.map((key) => {
     const value = p[key];
     let shown;
-    if (key === 'commune') shown = `${communeName()} (${value})`;
+    if (key === 'commune') shown = `${entry?.commune ?? communeName()} (${value})`;
     else if (key === 'contenance') shown = `${formatM2(value, lang())} m² · ${formatHaCa(value)}`;
     else if (key === 'arpente') shown = value ? T('Yes', 'Oui') : T('No', 'Non');
     else shown = value === null || value === undefined ? '–' : String(value);
@@ -918,8 +1129,10 @@ function fieldValue(feature) {
   });
 }
 
-function detailRow(feature, i) {
-  const fields = fieldValue(feature);
+function detailRow(feature, i, entry) {
+  const fields = fieldValue(feature, entry);
+  const group = state.result?.groups.find((g) => g.insee === entry?.insee);
+  const sourceUrl = group?.sourceUrl ?? '';
   return h('tr', { class: 'pc-detail-row', id: `pc-detail-${i}`, hidden: true },
     h('td', { colspan: '8' },
       h('dl', { class: 'pc-fields' }, ...fields.flatMap(([term, value, mono]) => [
@@ -927,7 +1140,7 @@ function detailRow(feature, i) {
         h('dd', {}, mono ? h('code', { text: value }) : value),
       ])),
       h('p', { class: 'small muted' }, T('Source file: ', 'Fichier source : '),
-      h('a', { href: state.result?.sourceUrl ?? '', target: '_blank', rel: 'noopener' }, state.result?.sourceUrl?.replace(/^https?:\/\//, '') ?? '')),
+      h('a', { href: sourceUrl, target: '_blank', rel: 'noopener' }, sourceUrl.replace(/^https?:\/\//, ''))),
       h('p', { class: 'note small' }, T(
         'The open cadastre has no owner name, no postal address and no tax value for this parcel.',
         'Le cadastre ouvert ne contient ni nom de propriétaire, ni adresse postale, ni valeur fiscale pour cette parcelle.',
@@ -936,6 +1149,7 @@ function detailRow(feature, i) {
 
 function table(found) {
   const totals = sumContenances(found.map(({ feature }) => feature));
+  const multi = (state.result?.groups.length ?? 1) > 1;
   const head = h('thead', {}, h('tr', {},
     h('th', { scope: 'col' }, h('span', { class: 'visually-hidden', text: T('Colour', 'Couleur') })),
     h('th', { scope: 'col', text: T('Section', 'Section') }),
@@ -947,7 +1161,7 @@ function table(found) {
     h('th', { scope: 'col' }, h('span', { class: 'visually-hidden', text: T('Actions', 'Actions') }))));
 
   const rows = [];
-  found.forEach(({ feature }, i) => {
+  found.forEach(({ feature, entry }, i) => {
     const p = feature.properties ?? {};
     const item = {
       section: String(p.section ?? '').toUpperCase() || null,
@@ -955,6 +1169,7 @@ function table(found) {
       prefixe: p.prefixe ?? '000',
     };
     const ref = refText(item, lang());
+    const where = entry?.commune ? ` (${entry.commune})` : '';
     const detailButton = h('button', {
       type: 'button',
       class: 'pc-linkbtn',
@@ -965,7 +1180,7 @@ function table(found) {
     const showButton = h('button', {
       type: 'button',
       class: 'pc-linkbtn',
-      'aria-label': T(`Show parcel ${ref} on the map`, `Voir la parcelle ${ref} sur la carte`),
+      'aria-label': T(`Show parcel ${ref}${where} on the map`, `Voir la parcelle ${ref}${where} sur la carte`),
       onclick: () => focusParcel(i),
       text: T('Show', 'Voir'),
     });
@@ -976,9 +1191,9 @@ function table(found) {
       h('td', { class: 'num', text: formatM2(p.contenance, lang()) }),
       h('td', { class: 'pc-haca', text: formatHaCa(p.contenance) }),
       h('td', { text: p.arpente ? T('Yes', 'Oui') : T('No', 'Non') }),
-      h('td', { class: 'pc-commune-cell', text: communeName() }),
+      h('td', { class: 'pc-commune-cell', text: entry?.commune ?? '' }),
       h('td', { class: 'pc-actions-cell' }, showButton, ' ', detailButton));
-    const detail = detailRow(feature, i);
+    const detail = detailRow(feature, i, entry);
     detailButton.addEventListener('click', () => {
       const open = detail.hidden;
       detail.hidden = !open;
@@ -996,9 +1211,40 @@ function table(found) {
     h('td', {}),
     h('td', {})));
 
+  const caption = multi
+    ? T(`Parcels found in ${state.result.groups.length} communes`, `Parcelles trouvées dans ${state.result.groups.length} communes`)
+    : T('Parcels found in ', 'Parcelles trouvées à ') + communeName();
   return { node: h('table', { class: 'pc-table' },
-    h('caption', { class: 'visually-hidden', text: T('Parcels found in ', 'Parcelles trouvées à ') + communeName() }),
+    h('caption', { class: 'visually-hidden', text: caption }),
     head, h('tbody', {}, ...rows), foot), totals };
+}
+
+function renderImportErrors() {
+  if (!els.importErrors) return;
+  if (!state.importErrors.length) {
+    els.importErrors.replaceChildren();
+    return;
+  }
+  const message = (error) => {
+    const at = error.index ? T(`Entry ${error.index}: `, `Entrée ${error.index} : `) : '';
+    switch (error.code) {
+      case 'bad-json': return T('The file is not valid JSON.', 'Le fichier n’est pas du JSON valide.');
+      case 'bad-shape': return T('Expected an object with a “parcelles” array.', 'Attendu : un objet avec un tableau « parcelles ».');
+      case 'too-many': return T(`Too many parcels (${error.count}). Keep ${MAX_SELECTION} or fewer.`, `Trop de parcelles (${error.count}). Limitez à ${MAX_SELECTION} ou moins.`);
+      case 'bad-entry': return at + T('this entry is not an object.', 'cette entrée n’est pas un objet.');
+      case 'bad-commune': return at + T('“commune” must be a 5-character INSEE code.', '« commune » doit être un code INSEE à 5 caractères.');
+      case 'bad-section': return at + T('“section” must be one or two letters.', '« section » doit être une ou deux lettres.');
+      case 'bad-numero': return at + T('“numero” must be from 1 to 9999.', '« numero » doit aller de 1 à 9999.');
+      case 'no-entries': return T('No valid parcel in this file.', 'Aucune parcelle valide dans ce fichier.');
+      default: return at + (error.code || T('unknown error', 'erreur inconnue'));
+    }
+  };
+  els.importErrors.replaceChildren(h('div', { class: 'pc-parse-errors' },
+    h('p', { class: 'pc-subhead', text: T('Problems in the imported file', 'Problèmes dans le fichier importé') }),
+    h('ul', {}, ...state.importErrors.map((error) => h('li', {},
+      error.raw !== undefined && error.raw !== null ? h('code', { text: String(error.raw) }) : null,
+      error.raw !== undefined && error.raw !== null ? ' — ' : null,
+      message(error))))));
 }
 
 function renderResults() {
@@ -1012,24 +1258,40 @@ function renderResults() {
   }
   if (!state.result) {
     els.summary.replaceChildren(h('p', { class: 'muted', text: state.commune
-      ? T(`Commune ${communeName()} selected. Enter parcel references and press “Show parcels”.`, `Commune ${communeName()} sélectionnée. Saisissez les références des parcelles et cliquez sur « Afficher les parcelles ».`)
-      : T('Choose a commune, then enter parcel references.', 'Choisissez une commune, puis saisissez les références des parcelles.') }));
+      ? T(`Commune ${communeName()} selected. Enter parcel references and press “Show parcels”, or import a JSON file.`, `Commune ${communeName()} sélectionnée. Saisissez les références des parcelles et cliquez sur « Afficher les parcelles », ou importez un fichier JSON.`)
+      : T('Choose a commune, enter references, or import a JSON selection.', 'Choisissez une commune, saisissez des références, ou importez une sélection JSON.') }));
     els.table.replaceChildren();
     els.notfound.replaceChildren();
     return;
   }
 
   const { found, notFound, edition } = state.result;
+  const multi = state.result.groups.length > 1;
   const { node, totals } = table(found);
   const summary = [];
   summary.push(h('p', { class: 'pc-count' }, h('strong', { text: `${found.length} / ${state.result.requested.length}` }), ' ', T('parcels found', 'parcelles trouvées')));
+  if (multi) {
+    summary.push(h('p', { class: 'small muted', text: T(
+      `${state.result.groups.length} communes: ${state.result.groups.map((g) => `${groupName(g)} (${g.insee})`).join(', ')}.`,
+      `${state.result.groups.length} communes : ${state.result.groups.map((g) => `${groupName(g)} (${g.insee})`).join(', ')}.`,
+    ) }));
+  }
   summary.push(h('p', { class: 'small muted', text: `${T('Total area', 'Surface totale')}: ${formatHaCa(totals.total)} (${formatM2(totals.total, lang())} m²)` }));
   if (totals.missing) summary.push(h('p', { class: 'small muted', text: T(`${totals.missing} parcel(s) have no contenance and are left out of the total.`, `${totals.missing} parcelle(s) sans contenance sont exclues du total.`) }));
   if (notFound.length) summary.push(h('p', { class: 'small muted', text: T(`${notFound.length} requested parcel(s) not found.`, `${notFound.length} parcelle(s) demandée(s) introuvable(s).`) }));
   if (state.parseErrors.length) summary.push(h('p', { class: 'small muted', text: T(`${state.parseErrors.length} line(s) could not be read.`, `${state.parseErrors.length} ligne(s) illisible(s).`) }));
   if (edition) summary.push(h('p', { class: 'small muted' }, T('Cadastre edition: ', 'Édition du cadastre : '), h('strong', { text: edition }), ' ', ...cite('cadastre')));
-  summary.push(h('p', { class: 'small' }, h('a', { href: state.result.sourceUrl, target: '_blank', rel: 'noopener' }, T('Open this commune’s parcel file (json.gz)', 'Ouvrir le fichier des parcelles de cette commune (json.gz)')), ' ', ...cite('cadastre')));
-  if (!found.length) summary.push(h('p', { class: 'note', text: T('None of the requested parcels were found; the map is fitted to the commune.', 'Aucune des parcelles demandées n’a été trouvée ; la carte est cadrée sur la commune.') }));
+  for (const group of state.result.groups) {
+    summary.push(h('p', { class: 'small' },
+      h('a', { href: group.sourceUrl, target: '_blank', rel: 'noopener' }, multi
+        ? T(`Open the parcel file for ${groupName(group)} (${group.insee}) (json.gz)`, `Ouvrir le fichier des parcelles de ${groupName(group)} (${group.insee}) (json.gz)`)
+        : T('Open this commune’s parcel file (json.gz)', 'Ouvrir le fichier des parcelles de cette commune (json.gz)')),
+      ' ', ...cite('cadastre')));
+    if (group.error) summary.push(h('p', { class: 'note' }, h('strong', { text: `${groupName(group)} (${group.insee})` }), ' — ', errorMessage(group.error)));
+  }
+  if (!found.length) summary.push(h('p', { class: 'note', text: multi
+    ? T('None of the requested parcels were found; the map is fitted to the communes.', 'Aucune des parcelles demandées n’a été trouvée ; la carte est cadrée sur les communes.')
+    : T('None of the requested parcels were found; the map is fitted to the commune.', 'Aucune des parcelles demandées n’a été trouvée ; la carte est cadrée sur la commune.') }));
   els.summary.replaceChildren(...summary);
   els.table.replaceChildren(found.length ? node : h('p', { class: 'muted', text: T('No parcel drawn.', 'Aucune parcelle dessinée.') }));
 
@@ -1037,8 +1299,8 @@ function renderResults() {
     els.notfound.replaceChildren();
   } else {
     els.notfound.replaceChildren(h('div', { class: 'pc-notfound' },
-      h('h3', { text: T('Not found in this commune', 'Introuvables dans cette commune') }),
-      h('ul', {}, ...notFound.map(({ item, reason, candidates }) => {
+      h('h3', { text: multi ? T('Not found in the selected communes', 'Introuvables dans les communes sélectionnées') : T('Not found in this commune', 'Introuvables dans cette commune') }),
+      h('ul', {}, ...notFound.map(({ item, reason, candidates, commune }) => {
         const ref = refText(item, lang());
         let message;
         if (reason === 'ambiguous') {
@@ -1058,10 +1320,13 @@ function renderResults() {
             'introuvable. Vérifiez la lettre de section et le numéro ; la parcelle peut appartenir à une commune voisine.',
           );
         }
-        return h('li', {}, h('strong', { text: ref }), ' — ', message);
+        return h('li', {}, h('strong', { text: `${commune ? `${commune} · ` : ''}${ref}` }), ' — ', message);
       })),
-      state.result.index.sections.length
-        ? h('p', { class: 'small muted', text: T('Sections present in this commune: ', 'Sections présentes dans cette commune : ') + state.result.index.sections.join(', ') })
+      state.result.groups.some((g) => g.index?.sections?.length)
+        ? h('p', { class: 'small muted', text: T('Sections present: ', 'Sections présentes : ') + state.result.groups
+          .filter((g) => g.index?.sections?.length)
+          .map((g) => `${groupName(g)}: ${g.index.sections.join(', ')}`)
+          .join(' · ') })
         : null));
   }
 }
@@ -1149,6 +1414,28 @@ function controlsSection() {
     }
   });
 
+  const selectionName = h('input', {
+    id: 'pc-selection-name',
+    type: 'text',
+    autocomplete: 'off',
+    spellcheck: 'false',
+    maxlength: '120',
+    placeholder: T('Pouzols + Mailhac', 'Pouzols + Mailhac'),
+  });
+  selectionName.value = state.selectionNom;
+  selectionName.addEventListener('input', () => { state.selectionNom = selectionName.value; });
+
+  const fileInput = h('input', {
+    id: 'pc-import-file',
+    type: 'file',
+    accept: 'application/json,.json',
+    hidden: true,
+  });
+  fileInput.addEventListener('change', () => {
+    importFile(fileInput.files?.[0]);
+    fileInput.value = '';
+  });
+
   return h('section', { class: 'card pc-controls', 'aria-labelledby': 'pc-commune-h' },
     h('h2', { id: 'pc-commune-h', text: T('1. Commune', '1. Commune') }),
     h('div', { class: 'pc-search' },
@@ -1162,10 +1449,19 @@ function controlsSection() {
     h('h2', { id: 'pc-parcels-h', text: T('2. Parcels', '2. Parcelles') }),
     h('label', { for: 'pc-input', class: 'pc-label', text: T('Section and number, one per line', 'Section et numéro, un par ligne') }),
     input,
-    h('p', { id: 'pc-format-hint', class: 'hint' }, T('Formats: ', 'Formats : '), code('B 590'), ', ', code('B590'), ', ', code('B-590'), ', ', code('0590'), T(' (number only), ', ' (numéro seul), '), code('11296 B 590'), T(' or the full id ', ' ou l’identifiant complet '), code('112960000B0590'), T('. Separate by a new line, comma or semicolon. Up to 100 parcels.', '. Séparez par un retour à la ligne, une virgule ou un point-virgule. Jusqu’à 100 parcelles.')),
+    h('p', { id: 'pc-format-hint', class: 'hint' }, T('Formats: ', 'Formats : '), code('B 590'), ', ', code('B590'), ', ', code('B-590'), ', ', code('0590'), T(' (number only), ', ' (numéro seul), '), code('11296 B 590'), T(' or the full id ', ' ou l’identifiant complet '), code('112960000B0590'), T('. Separate by a new line, comma or semicolon. Up to 100 parcels. Several communes are allowed when each line starts with its INSEE code.', '. Séparez par un retour à la ligne, une virgule ou un point-virgule. Jusqu’à 100 parcelles. Plusieurs communes sont acceptées si chaque ligne commence par son code INSEE.')),
+    h('label', { for: 'pc-selection-name', class: 'pc-label', text: T('Selection name (optional)', 'Nom de la sélection (facultatif)') }),
+    selectionName,
     h('div', { class: 'pc-actions' },
       h('button', { id: 'pc-run', type: 'button', class: 'pc-btn primary', onclick: () => void run(), text: T('Show parcels', 'Afficher les parcelles') }),
       h('button', { id: 'pc-clear', type: 'button', class: 'pc-btn', onclick: clearParcels, text: T('Clear parcels', 'Vider la liste') })),
+    h('div', { class: 'pc-actions' },
+      h('button', { id: 'pc-export', type: 'button', class: 'pc-btn', onclick: downloadSelection, text: T('Export (.json)', 'Exporter (.json)') }),
+      h('button', { id: 'pc-import', type: 'button', class: 'pc-btn', onclick: () => fileInput.click(), text: T('Import (.json)', 'Importer (.json)') }),
+      fileInput,
+      h('button', { id: 'pc-seed', type: 'button', class: 'pc-btn', onclick: () => void loadSeed(), text: T('Example: Pouzols + Mailhac', 'Exemple : Pouzols + Mailhac') })),
+    h('p', { class: 'hint' }, T('The exported file stays on your device: it is written by your browser and never uploaded. Import checks every entry and lists the malformed or missing ones.', 'Le fichier exporté reste sur votre appareil : il est écrit par votre navigateur et jamais envoyé. L’import vérifie chaque entrée et liste les entrées mal formées ou introuvables.')),
+    h('div', { id: 'pc-import-errors' }),
     h('div', { id: 'pc-parse-errors' }),
     h('p', { id: 'pc-status', class: 'pc-status', role: 'status', 'aria-live': 'polite' }),
     h('p', { id: 'pc-error', class: 'err', role: 'alert' }));
@@ -1252,6 +1548,8 @@ function build() {
     inseeMsg: document.getElementById('pc-insee-msg'),
     inseeDetails: document.querySelector('.pc-insee'),
     input: document.getElementById('pc-input'),
+    selectionName: document.getElementById('pc-selection-name'),
+    importErrors: document.getElementById('pc-import-errors'),
     parseErrors: document.getElementById('pc-parse-errors'),
     status: document.getElementById('pc-status'),
     error: document.getElementById('pc-error'),
@@ -1266,31 +1564,36 @@ function build() {
   });
 
   renderSearch();
+  renderImportErrors();
   renderCommune();
   renderParseErrors();
   renderError();
   renderStatus();
   renderResults();
   if (state.result) void renderMap({ fit: !state.view, restoreView: !!state.view });
-  else if (state.outline) void renderMap({ fit: !state.view, restoreView: !!state.view });
+  else if (state.preview?.outline) void renderMap({ fit: !state.view, restoreView: !!state.view });
   else showMapPlaceholder();
 }
 
+/** Read the route into the form. Returns whether it carried a selection. */
 function readParams(params) {
   if (state.searchTimer) clearTimeout(state.searchTimer);
   state.searchAbort?.abort();
   const c = normalizeInsee(params.get('c') ?? '');
-  const tokens = (params.get('p') ?? '').split(',').map((s) => s.trim()).filter(Boolean);
   const previous = state.commune;
   const same = previous && previous.insee === c;
   state.commune = isValidInsee(c) ? { insee: c, name: same ? previous.name : null, dep: departmentOf(c) } : null;
-  state.input = tokens.join('\n');
-  state.lastTokens = tokens;
+  const parsed = parseSelectionParam(params.get('p') ?? '', state.commune?.insee ?? null);
+  state.entries = parsed.items;
+  state.input = parsed.items.map((item) => formatEntryLine(item)).join('\n');
+  state.selectionNom = params.get('n') ?? '';
+  state.importErrors = [];
   state.result = null;
-  state.outline = null;
-  state.parseErrors = [];
+  state.preview = null;
+  state.parseErrors = parsed.errors;
   state.errorInfo = null;
   state.loading = false;
+  state.loadingCount = 1;
   state.search.q = state.commune?.name ?? '';
   state.search.items = [];
   state.search.active = -1;
@@ -1300,45 +1603,71 @@ function readParams(params) {
   state.view = null;
   state.runToken += 1;
   state.outlineToken += 1;
+  return state.entries.length > 0 || state.commune !== null;
 }
 
 function writeRoute() {
   const params = new URLSearchParams();
-  if (state.commune) {
+  const entries = state.entries.filter((entry) => isValidInsee(entry.insee));
+  const codes = [...new Set(entries.map((entry) => entry.insee))];
+  if (entries.length && codes.length === 1) {
+    params.set('c', codes[0]);
+    params.set('p', entries.map((entry) => canonicalToken(entry)).join(','));
+  } else if (entries.length) {
+    params.set('p', formatSelectionParam(entries));
+  } else if (state.commune) {
     params.set('c', state.commune.insee);
-    if (state.lastTokens.length) params.set('p', state.lastTokens.join(','));
   }
+  const nom = String(state.selectionNom ?? '').trim();
+  if (nom) params.set('n', nom);
   state.paramsRaw = params.toString();
   ctx.setParams(params);
+}
+
+/** A first visit or a cleared route: the saved selection, else the example. */
+function restoreInitial() {
+  const stored = readStoredSelection();
+  if (stored) {
+    importText(stored);
+    return;
+  }
+  void loadSeed();
 }
 
 export function mount(root, { params, setParams }) {
   ctx = { root, setParams };
   state.commune = null;
   state.input = '';
-  state.lastTokens = [];
+  state.entries = [];
+  state.selectionNom = '';
+  state.importErrors = [];
   state.result = null;
   state.loading = false;
+  state.loadingCount = 1;
   state.parseErrors = [];
   state.errorInfo = null;
   state.view = null;
-  state.outline = null;
+  state.preview = null;
   state.search = { q: '', items: [], active: -1, open: false, loading: false, error: null, token: state.search.token + 1 };
   state.searchCache = new Map();
   state.paramsRaw = '';
-  readParams(params);
+  const hadState = readParams(params);
   build();
   writeRoute();
-  if (state.commune) {
-    void previewCommune({ quiet: true });
-    if (state.lastTokens.length) void run();
+  if (hadState) {
+    if (state.commune) void previewCommune({ quiet: true });
+    if (state.entries.length) void run();
+  } else {
+    restoreInitial();
   }
 
   return {
     show(next) {
       if (next.toString() === state.paramsRaw) return;
-      readParams(next);
+      const hadState = readParams(next);
       if (els.input) els.input.value = state.input;
+      if (els.selectionName) els.selectionName.value = state.selectionNom;
+      renderImportErrors();
       renderSearch();
       renderCommune();
       renderParseErrors();
@@ -1349,13 +1678,13 @@ export function mount(root, { params, setParams }) {
       state.groups?.outline.clearLayers();
       if (els.legend) els.legend.hidden = true;
       writeRoute();
-      if (state.commune) {
-        void previewCommune({ quiet: true });
-        if (state.lastTokens.length) void run();
+      if (hadState) {
+        if (state.commune) void previewCommune({ quiet: true });
+        if (state.entries.length) void run();
       } else {
         destroyMap();
         state.view = null;
-        showMapPlaceholder();
+        restoreInitial();
       }
     },
     relang() {

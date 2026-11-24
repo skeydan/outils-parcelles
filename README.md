@@ -5,12 +5,18 @@ list of section + number references, and see each parcel on an
 OpenStreetMap map with every attribute the open cadastre publishes — the
 area in m² and in hectares / ares / centiares (`1 ha 07 a 00 ca`).
 
+A selection can span **several communes**: each line then starts with its
+5-character INSEE code, and every commune is fetched once and drawn on the
+same map and table. A selection can also be exported to a small JSON file,
+imported back, and kept in `localStorage`; all of that stays in the browser.
+
 Static site, one page, no backend, no build step, no account, no key, no
 tracking, no cookies. French and English, light and dark, keyboard and
 phone. The URL carries the state, so a result is shareable and bookmarkable.
 
 ```
 #/parcels?c=11296&p=B590%2CB593%2CB1137
+#/parcels?p=11296-B627%2C11212-B93&n=Pouzols+%2B+Mailhac
 ```
 
 ## Run it
@@ -52,13 +58,55 @@ Numbers are compared without leading zeros (`0002` = `2`). Duplicates are
 dropped. The limit is 100 references per lookup.
 
 If no commune is selected yet but every reference carries the same INSEE
-code, that commune is used. References from two communes in the same list
-are refused with an explicit message. Lines that cannot be read are listed
-one by one, with the reason, and never guessed.
+code, that commune is used. A list may mix communes as long as **every line
+starts with its INSEE code** (`11296 B 590`, `11212 B 93`); bare references
+still use the commune selected above. Each commune is fetched once, and the
+table and map show the parcels together. Lines that cannot be read are
+listed one by one, with the reason, and never guessed.
 
 Paris, Lyon and Marseille are published by arrondissement (`75101`,
 `69381`, `13201`, …), not under `75056`, `69123`, `13055`. A 404 on those
 codes says so and gives a worked example.
+
+## JSON selection (export, import, saved copy)
+
+**Export (.json)** downloads the current list as a local file. **Import
+(.json)** reads a file chosen on your device, validates every entry, keeps
+the valid ones, and reports each malformed entry with its 1-based position.
+The selection is also written to `localStorage` after a successful run, so
+returning to the site restores it; **Clear parcels** removes that copy.
+
+Nothing is uploaded: the export is a `Blob` written by the browser, the
+import uses the File API, and the saved copy is `localStorage` only. There
+is no server to send it to.
+
+Format:
+
+```json
+{
+  "nom": "Pouzols + Mailhac",
+  "parcelles": [
+    { "commune": "11296", "section": "B", "numero": "590" },
+    { "commune": "11212", "section": "B", "numero": "93" }
+  ]
+}
+```
+
+- `nom` is optional; it is shown as the selection name and reused in the
+  export filename (`parcelles-pouzols-mailhac-2026-11-24.json`).
+- `commune` is the 5-character INSEE code. `section` is one or two letters;
+  `numero` may be zero-padded (`"0590"` = `"590"`). Both are normalized.
+- A bare array is accepted instead of the object. Unknown fields are
+  ignored, so a newer file with extra name/group/colour fields still
+  imports; duplicates are dropped.
+- Entries that are well formed but absent from the commune are listed in
+  the not-found report (with the commune name), not silently dropped.
+
+The example **Pouzols + Mailhac** (18 parcels: 14 in `11296`
+Pouzols-Minervois, 4 in `11212` Mailhac) lives in
+[`site/examples/pouzols-mailhac.json`](site/examples/pouzols-mailhac.json).
+A first visit with no saved selection loads it automatically; the
+**Example: Pouzols + Mailhac** button loads it again.
 
 ## What it shows
 
@@ -159,6 +207,9 @@ page that must stay light (sizes gzipped, measured 2026-11-24):
 Nothing is bundled: every reference is fetched on demand. The parcel file
 is cached per commune in memory for the life of the page (a promise cache
 deduplicates concurrent requests; failures are evicted so a retry works).
+A multi-commune selection requests each missing commune once, in parallel,
+with the commune outlines; one failed commune does not hide the others, and
+its error is shown under the sources of the fetched groups.
 
 ## Map
 
@@ -190,8 +241,11 @@ row shows every source property and links the source file.
 
 Only non-default state is written, canonicalized with `URLSearchParams`:
 
-- `c` — commune INSEE code;
-- `p` — comma-separated canonical references (`B590`, `001B12`, …).
+- `c` — selected commune INSEE code (kept for bare references);
+- `p` — comma-separated preferences. One commune: bare canonical tokens
+  (`B590`, `001B12`, …) with `c`; several communes: every token carries its
+  INSEE code, `11296-B590,11212-B93`;
+- `n` — optional selection name.
 
 Examples:
 
@@ -199,14 +253,16 @@ Examples:
 #/parcels
 #/parcels?c=11296
 #/parcels?c=11296&p=B590%2CB593%2CB1137
+#/parcels?p=11296-B627%2C11212-B93&n=Pouzols+%2B+Mailhac
 ```
 
 The hash router is `#/<tab>?<state>`. Unknown routes and untidy hashes fall
 back to the parcels tab and are rewritten. Opening a result URL loads the
-commune and the parcels immediately. `?lang=fr` / `?lang=en` is read before
-the saved language and the browser preference; the FR/EN switch keeps the
-route. Theme follows the system, with a switch; only the language and
-theme choices are stored in `localStorage`.
+commune(s) and the parcels immediately. Old single-commune links with bare
+`p` tokens still work. `?lang=fr` / `?lang=en` is read before the saved
+language and the browser preference; the FR/EN switch keeps the route.
+Theme follows the system, with a switch. The language, theme and current
+selection are stored in `localStorage`; nothing else is.
 
 ## Files
 
@@ -218,7 +274,10 @@ site/app/tabs.js                 tab registry (one tab: parcels)
 site/assets/site.js              language + theme shell
 site/assets/ui.js                DOM helpers, numbered citations
 site/assets/site.css             shell styles
-site/tabs/parcels/js/app.js      the tool: commune search, run, map, table
+site/tabs/parcels/js/app.js      the tool: commune search, run, map, table,
+                                 export/import, saved selection
+site/tabs/parcels/js/selection.js  JSON validation, grouping, URL form,
+                                 localStorage
 site/tabs/parcels/js/parcel-id.js  flexible reference parsing + matching
 site/tabs/parcels/js/units.js    m² ↔ ha/a/ca
 site/tabs/parcels/js/commune.js  INSEE, URLs, geo API parsing, edition
@@ -226,6 +285,7 @@ site/tabs/parcels/js/cadastre.js fetch + decompress + cache
 site/tabs/parcels/js/geo.js      colours and bounding boxes
 site/tabs/parcels/js/sources.js  the cited sources
 site/tabs/parcels/css/parcels.css
+site/examples/pouzols-mailhac.json  the 18-parcel example (14 + 4)
 site/vendor/leaflet/             Leaflet 1.9.4 + licence
 tests/*.test.mjs                 node:test, pure functions only
 scripts/e2e.mjs                  Playwright, real endpoint, screenshots
@@ -240,6 +300,12 @@ deploy/default.conf.template     nginx + CSP for the data sources and tiles
   errors, full ids with a zero-padded section, number normalization,
   duplicate removal, section/number/prefix matching, ambiguity, the
   100-parcel limit;
+- selection JSON: documented shape, bare array, optional/missing name,
+  unknown fields, malformed entries and 1-based indices, bad JSON/shape,
+  the 100-parcel limit, normalization, duplicate removal, serialization
+  round-trip, textarea lines, grouping by INSEE, fallback commune,
+  fully-qualified URL round-trip (old bare links still read), export
+  filename, and localStorage failures;
 - units: m² → ha/a/ca, locale separators, missing areas, totals;
 - commune: INSEE validation, department extraction (overseas, Corsica),
   download and bundler URLs, geo API URL and response, outline name,
@@ -248,13 +314,17 @@ deploy/default.conf.template     nginx + CSP for the data sources and tiles
 - router: round-trip, canonical form, anchors, fallbacks, tab keys, tab
   registry, vendored Leaflet files.
 
-`npm run e2e` drives Chromium against the real cadastre endpoint (commune
-11296, parcels B 590, B 593, B 1137 and a missing B 9999): table values in
-m² and ha/a/ca, total, not-found report, popup, detail row, shareable URL,
-commune search by name, 404 and offline errors, language/theme, phone tab
-targets, no horizontal overflow and no console errors. The two negative
-scenarios (deliberate 404, deliberately blocked network) allow the browser's
-own resource-error messages; uncaught page errors still fail the run.
+`npm run e2e` drives Chromium against the real cadastre endpoint: the
+seeded 18-parcel, two-commune example; its 14 + 4 commune split, totals and
+single map; export/import round-trip, malformed-entry report, not-found
+report, localStorage restore, and the example button; then a real lookup
+for commune 11296 (parcels B 590, B 593, B 1137 and a missing B 9999):
+table values in m² and ha/a/ca, total, not-found report, popup, detail row,
+shareable URL, commune search by name, 404 and offline errors,
+language/theme, phone tab targets, no horizontal overflow and no console
+errors. The two negative scenarios (deliberate 404, deliberately blocked
+network) allow the browser's own resource-error messages; uncaught page
+errors still fail the run.
 
 ## Licence
 
