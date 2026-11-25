@@ -5,15 +5,18 @@
 // breaking older files.
 //
 // {
-//   "nom": "Le Mont-Saint-Michel",      // optional
+//   "nom": "Le Mont-Saint-Michel",      // optional, the whole selection's name
 //   "parcelles": [
-//     { "commune": "50353", "section": "AB", "numero": "1" }
+//     { "commune": "50353", "section": "AB", "numero": "1",
+//       "nom": "the field by the road", "couleur": "#e6194b" }   // both optional
 //   ]
 // }
 //
 // `commune` is the 5-character INSEE code. `numero` may be zero-padded.
-// Entries are normalized (INSEE uppercase, section without leading zero,
-// number without leading zeros) and duplicates are dropped.
+// A parcel's `nom` (a short label) and `couleur` (any CSS colour) are kept
+// and shown on the map, in the legend and in the popup. Entries are
+// normalized (INSEE uppercase, section without leading zero, number without
+// leading zeros) and duplicates are dropped.
 
 import {
   MAX_PARCELS,
@@ -71,7 +74,12 @@ export function parseSelectionJson(text) {
     const key = `${commune}|${section}|${numero}`;
     if (seen.has(key)) return;
     seen.add(key);
-    entries.push({ insee: commune, section, numero });
+    const entryNom = typeof row.nom === 'string' ? row.nom.trim() : '';
+    const couleur = typeof row.couleur === 'string' ? row.couleur.trim() : '';
+    const entryObj = { insee: commune, section, numero };
+    if (entryNom) entryObj.nom = entryNom;
+    if (couleur) entryObj.couleur = couleur;
+    entries.push(entryObj);
   });
   return { ok: entries.length > 0, nom, entries, errors };
 }
@@ -79,11 +87,18 @@ export function parseSelectionJson(text) {
 /** The canonical JSON text for a selection (pretty, trailing newline). */
 export function serializeSelection({ nom = '', entries = [] } = {}) {
   const parcelles = (Array.isArray(entries) ? entries : [])
-    .map((entry) => ({
-      commune: normalizeInsee(entry?.insee ?? entry?.commune),
-      section: normalizeSection(entry?.section),
-      numero: normalizeNumero(entry?.numero),
-    }))
+    .map((entry) => {
+      const out = {
+        commune: normalizeInsee(entry?.insee ?? entry?.commune),
+        section: normalizeSection(entry?.section),
+        numero: normalizeNumero(entry?.numero),
+      };
+      const entryNom = String(entry?.nom ?? '').trim();
+      const couleur = String(entry?.couleur ?? '').trim();
+      if (entryNom) out.nom = entryNom;
+      if (couleur) out.couleur = couleur;
+      return out;
+    })
     .filter((entry) => INSEE_RE.test(entry.commune) && entry.section && entry.numero);
   const out = {};
   const label = String(nom ?? '').trim();

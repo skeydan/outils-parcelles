@@ -87,7 +87,7 @@ Format:
 {
   "nom": "Le Mont-Saint-Michel",
   "parcelles": [
-    { "commune": "50353", "section": "AB", "numero": "1" },
+    { "commune": "50353", "section": "AB", "numero": "1", "nom": "the field by the road", "couleur": "#e6194b" },
     { "commune": "50353", "section": "AB", "numero": "6" }
   ]
 }
@@ -97,9 +97,12 @@ Format:
   export filename (`parcelles-le-mont-saint-michel-2026-11-24.json`).
 - `commune` is the 5-character INSEE code. `section` is one or two letters;
   `numero` may be zero-padded (`"0590"` = `"590"`). Both are normalized.
+- Each parcel may add a `nom` (a short label shown on the map, in the legend
+  and in the popup) and a `couleur` (any CSS colour, e.g. `#e6194b` or
+  `red`); both are optional and override the automatic label and colour.
 - A bare array is accepted instead of the object. Unknown fields are
-  ignored, so a newer file with extra name/group/colour fields still
-  imports; duplicates are dropped.
+  ignored, so a newer file with extra group/colour fields still imports;
+  duplicates are dropped.
 - Entries that are well formed but absent from the commune are listed in
   the not-found report (with the commune name), not silently dropped.
 
@@ -231,9 +234,11 @@ a low-volume personal tool. Tiles are the only map resource that needs the
 network: if they fail, the parcel outlines and the table still work and a
 note says the basemap could not load.
 
-Each found parcel gets a distinct colour, a permanent section/number label
-(switchable), a click popup with section, number, m², ha/a/ca, `arpente`
-and the full id, and a legend button that zooms to it. The map fits the
+Each found parcel gets a distinct colour (or its `couleur` from the imported
+file), a permanent label (its `nom`, or section/number — switchable), a click
+popup with section, number, m², ha/a/ca, `arpente` and the full id, and a
+legend chip that zooms to it. Hovering (or focusing) a legend chip highlights
+the matching parcel on the map. The map fits the
 found parcels; when none is found it fits the commune outline. The detail
 row shows every source property and links the source file.
 

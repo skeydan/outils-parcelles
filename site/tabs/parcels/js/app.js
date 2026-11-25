@@ -332,12 +332,14 @@ function clearParcelLayers() {
 
 function popupContent(feature, entry) {
   const p = feature.properties ?? {};
-  const rows = [
+  const rows = [];
+  if (entry?.nom) rows.push([T('Note', 'Note'), entry.nom]);
+  rows.push(
     [T('Commune', 'Commune'), `${entry?.commune ?? ''} (${entry?.insee ?? p.commune ?? ''})`.trim()],
     [T('Area', 'Surface'), `${formatM2(p.contenance, lang())} m² · ${formatHaCa(p.contenance)}`],
     [T('Surveyed', 'Arpentée'), p.arpente ? T('Yes', 'Oui') : T('No', 'Non')],
     [T('Parcel ID', 'Identifiant'), String(p.id ?? '')],
-  ];
+  );
   return h('div', { class: 'pc-pop' },
     h('p', { class: 'pc-pop-title', text: refText({
       section: String(p.section ?? '').toUpperCase() || null,
@@ -375,7 +377,7 @@ function drawLayers() {
   const parcels = state.result?.found ?? [];
   const foundBounds = L.latLngBounds([]);
   parcels.forEach(({ feature, entry }, i) => {
-    const color = parcelColor(i);
+    const color = entry?.couleur || parcelColor(i);
     const casing = L.geoJSON(feature, {
       style: { color: '#ffffff', weight: 7, opacity: 0.85, fill: false },
       interactive: false,
@@ -386,7 +388,8 @@ function drawLayers() {
     layer.bindPopup(popupContent(feature, entry), { minWidth: 220, maxWidth: 320, autoPanPadding: [24, 24] });
     if (state.labels) {
       const p = feature.properties ?? {};
-      layer.bindTooltip(`${p.section ?? ''} ${p.numero ?? ''}`.trim(), {
+      const label = entry?.nom || `${p.section ?? ''} ${p.numero ?? ''}`.trim();
+      layer.bindTooltip(label, {
         permanent: true,
         direction: 'center',
         className: 'pc-map-label',
@@ -426,13 +429,18 @@ function renderLegend() {
       numero: normalizeNumero(p.numero) ?? String(p.numero ?? ''),
       prefixe: p.prefixe ?? '000',
     };
-    const label = refText(item, lang());
+    const label = entry?.nom || refText(item, lang());
+    const color = entry?.couleur || parcelColor(i);
     return h('button', {
       type: 'button',
       class: 'pc-legend-chip',
       title: `${T('Show on the map', 'Voir sur la carte')} — ${label} (${entry?.commune ?? entry?.insee ?? ''})`,
       onclick: () => focusParcel(i),
-    }, h('span', { class: 'pc-swatch', 'aria-hidden': 'true', style: `--pc-c:${parcelColor(i)}` }),
+      onmouseenter: () => highlightParcel(i, true),
+      onmouseleave: () => highlightParcel(i, false),
+      onfocus: () => highlightParcel(i, true),
+      onblur: () => highlightParcel(i, false),
+    }, h('span', { class: 'pc-swatch', 'aria-hidden': 'true', style: `--pc-c:${color}` }),
     h('span', { text: label }));
   }));
 }
@@ -464,6 +472,13 @@ async function renderMap({ fit = false, restoreView = false } = {}) {
   } catch {
     showMapError();
   }
+}
+
+function highlightParcel(i, on) {
+  const layer = state.layers?.[i];
+  if (!layer) return;
+  layer.setStyle(on ? { weight: 5, fillOpacity: 0.55 } : { weight: 2.5, fillOpacity: 0.32 });
+  if (on) layer.bringToFront();
 }
 
 async function focusParcel(i) {
@@ -845,7 +860,7 @@ function importText(text) {
   if (els.legend) els.legend.hidden = true;
   state.groups?.outline.clearLayers();
   writeRoute();
-  void run();
+  void run(state.entries);
   return true;
 }
 
@@ -919,16 +934,26 @@ async function previewCommune({ quiet = false } = {}) {
   }
 }
 
-async function run() {
-  if (!els.input) return;
-  state.input = els.input.value;
-  state.errorInfo = null;
-  renderError();
-  const parsed = parseParcelList(state.input);
-  const resolved = resolveItems(parsed.items, state.commune?.insee ?? null);
-  state.parseErrors = [...parsed.errors, ...resolved.errors];
+async function run(itemsOverride = null) {
+  let items;
+  if (itemsOverride) {
+    items = itemsOverride;
+    state.input = items.map(formatEntryLine).join('\n');
+    if (els.input) els.input.value = state.input;
+    state.errorInfo = null;
+    renderError();
+    state.parseErrors = [];
+  } else {
+    if (!els.input) return;
+    state.input = els.input.value;
+    state.errorInfo = null;
+    renderError();
+    const parsed = parseParcelList(state.input);
+    const resolved = resolveItems(parsed.items, state.commune?.insee ?? null);
+    state.parseErrors = [...parsed.errors, ...resolved.errors];
+    items = resolved.items;
+  }
   renderParseErrors();
-  const items = resolved.items;
 
   if (!items.length) {
     setError({ kind: state.parseErrors.length ? 'all-unreadable' : 'empty' });
@@ -1470,10 +1495,10 @@ function controlsSection() {
     h('details', { class: 'pc-json' },
       h('summary', { text: T('JSON file format', 'Format du fichier JSON') }),
       h('p', { class: 'hint' }, T(
-        'A JSON object with an optional "nom" and a "parcelles" array. Each entry needs "commune" (5-character INSEE code), "section" and "numero" (zero-padding is fine). A bare array of entries is also accepted, and unknown fields are ignored. Up to 100 parcels.',
-        'Un objet JSON avec un « nom » facultatif et un tableau « parcelles ». Chaque entrée contient « commune » (code INSEE à 5 caractères), « section » et « numero » (les zéros de tête sont acceptés). Un simple tableau d’entrées est aussi accepté, et les champs inconnus sont ignorés. Jusqu’à 100 parcelles.',
+        'A JSON object with an optional "nom" and a "parcelles" array. Each entry needs "commune" (5-character INSEE code), "section" and "numero" (zero-padding is fine); an optional per-parcel "nom" adds a label and "couleur" a colour (any CSS colour). A bare array of entries is also accepted, and unknown fields are ignored. Up to 100 parcels.',
+        'Un objet JSON avec un « nom » facultatif et un tableau « parcelles ». Chaque entrée contient « commune » (code INSEE à 5 caractères), « section » et « numero » (les zéros de tête sont acceptés) ; un « nom » facultatif ajoute une étiquette et « couleur » une couleur (toute couleur CSS). Un simple tableau d’entrées est aussi accepté, et les champs inconnus sont ignorés. Jusqu’à 100 parcelles.',
       )),
-      h('pre', { class: 'pc-json-code', text: '{\n  "nom": "Le Mont-Saint-Michel",\n  "parcelles": [\n    { "commune": "50353", "section": "AB", "numero": "1" }\n  ]\n}' })),
+      h('pre', { class: 'pc-json-code', text: '{\n  "nom": "Le Mont-Saint-Michel",\n  "parcelles": [\n    { "commune": "50353", "section": "AB", "numero": "1", "nom": "the field by the road", "couleur": "#e6194b" }\n  ]\n}' })),
     h('p', { class: 'hint' }, T('The exported file stays on your device: it is written by your browser and never uploaded. Import checks every entry and lists the malformed or missing ones.', 'Le fichier exporté reste sur votre appareil : il est écrit par votre navigateur et jamais envoyé. L’import vérifie chaque entrée et liste les entrées mal formées ou introuvables.')),
     h('div', { id: 'pc-import-errors' }),
     h('div', { id: 'pc-parse-errors' }),
