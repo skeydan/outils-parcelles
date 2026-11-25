@@ -7,6 +7,8 @@ import {
   parseSelectionJson,
   serializeSelection,
   formatEntryLine,
+  entryKey,
+  carryAnnotations,
   groupByCommune,
   resolveItems,
   formatSelectionParam,
@@ -121,6 +123,42 @@ test('serialization: per-parcel nom, couleur and categorie round-trip', () => {
   assert.deepEqual(back.parcelles[0], { commune: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b', categorie: 'vigne' });
   assert.deepEqual(back.parcelles[1], { commune: '11296', section: 'B', numero: '616' });
   assert.deepEqual(parseSelectionJson(text).entries[0], { insee: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b', categorie: 'vigne' });
+});
+
+test('entryKey: stable identity, normalized', () => {
+  assert.equal(entryKey({ insee: '11296', section: 'b', numero: '0590' }), '11296|B|590');
+  assert.equal(entryKey({ commune: '2A004', section: '0B', numero: '7' }), '2A004|B|7');
+});
+
+test('carryAnnotations: annotations follow their parcel across a re-parse', () => {
+  const annotated = [
+    { insee: '11296', section: 'B', numero: '627', nom: 'la vigne', categorie: 'vigne' },
+    { insee: '11212', section: 'B', numero: '93', couleur: '#e6194b' },
+  ];
+  const fresh = [
+    { insee: '11296', section: 'B', numero: '627' },
+    { insee: '11212', section: 'B', numero: '93' },
+    { insee: '11296', section: 'A', numero: '590' },
+  ];
+  const out = carryAnnotations(fresh, annotated);
+  assert.deepEqual(out[0], { insee: '11296', section: 'B', numero: '627', nom: 'la vigne', categorie: 'vigne' });
+  assert.deepEqual(out[1], { insee: '11212', section: 'B', numero: '93', couleur: '#e6194b' });
+  assert.deepEqual(out[2], { insee: '11296', section: 'A', numero: '590' });
+  // the source entries are left untouched, and the caller's array is not mutated
+  assert.equal(annotated[0].nom, 'la vigne');
+  assert.equal(fresh[2].nom, undefined);
+});
+
+test('carryAnnotations: empty annotations and unknown parcels are dropped', () => {
+  const annotated = [
+    { insee: '11296', section: 'B', numero: '627', nom: '' },
+    { insee: '11296', section: 'B', numero: '628', nom: 'other' },
+  ];
+  const out = carryAnnotations(
+    [{ insee: '11296', section: 'B', numero: '627' }],
+    annotated,
+  );
+  assert.deepEqual(out, [{ insee: '11296', section: 'B', numero: '627' }]);
 });
 
 test('textarea lines and commune grouping', () => {

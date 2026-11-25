@@ -101,6 +101,11 @@ Format:
   and in the popup), a `couleur` (any CSS colour, e.g. `#e6194b` or `red`)
   and a `categorie` (a grouping name — parcels in one category share a
   colour); all are optional and override the automatic label and colour.
+- These annotations can also be set from the page itself: open a parcel's
+  detail row and type a label and a category, or pick a colour, then export.
+  The edits are written to the exported JSON (and to the saved copy), so the
+  whole flow — look up, name, categorise, save, load again — works without
+  touching the file by hand.
 - A bare array is accepted instead of the object. Unknown fields are
   ignored, so a newer file with extra group/colour fields still imports;
   duplicates are dropped.
@@ -240,8 +245,12 @@ the imported file), a permanent label (its `nom`, or section/number — switchab
 a click popup with section, number, m², ha/a/ca, `arpente` and the full id,
 and a legend chip that zooms to it. Hovering (or focusing) a legend chip
 highlights the matching parcel on the map. The map fits the
-found parcels; when none is found it fits the commune outline. The detail
-row shows every source property and links the source file.
+found parcels; when none is found it fits the commune outline. Focusing one
+parcel (a legend chip or the “Show” button) keeps some surrounding context
+rather than zooming in until the neighbourhood disappears, and an “Enlarge
+map” button stretches the map to most of the viewport. The detail
+row shows every source property, links the source file, and lets you edit the
+parcel's `nom`, `categorie` and `couleur`.
 
 ## URL state
 
@@ -309,9 +318,10 @@ deploy/default.conf.template     nginx + CSP for the data sources and tiles
 - selection JSON: documented shape, bare array, optional/missing name,
   unknown fields, malformed entries and 1-based indices, bad JSON/shape,
   the 100-parcel limit, normalization, duplicate removal, serialization
-  round-trip, textarea lines, grouping by INSEE, fallback commune,
-  fully-qualified URL round-trip (old bare links still read), export
-  filename, and localStorage failures;
+  round-trip, per-parcel `nom`/`couleur`/`categorie` parse and round-trip,
+  annotation carry-over across a re-parse, textarea lines, grouping by INSEE,
+  fallback commune, fully-qualified URL round-trip (old bare links still
+  read), export filename, and localStorage failures;
 - units: m² → ha/a/ca, locale separators, missing areas, totals;
 - commune: INSEE validation, department extraction (overseas, Corsica),
   download and bundler URLs, geo API URL and response, outline name,

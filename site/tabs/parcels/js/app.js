@@ -36,12 +36,14 @@ import {
   NoDecompressionError,
   BadFileError,
 } from './cadastre.js';
-import { bboxOfGeoJSON, parcelColor, categoryColor } from './geo.js';
+import { bboxOfGeoJSON, parcelColor, categoryColor, PARCEL_PALETTE } from './geo.js';
 import {
   MAX_SELECTION,
   parseSelectionJson,
   serializeSelection,
   formatEntryLine,
+  entryKey,
+  carryAnnotations,
   groupByCommune,
   resolveItems,
   formatSelectionParam,
@@ -81,6 +83,7 @@ const state = {
   groups: null,
   layers: [],
   labels: true,
+  mapLarge: false,
   view: null,
   mapInit: null,
   leafletPromise: null,
@@ -101,6 +104,53 @@ const smooth = () => (matchMedia('(prefers-reduced-motion: no-preference)').matc
 // ---------------------------------------------------------------- small builders
 const code = (text) => h('code', { text });
 const fact = (term, body) => [h('dt', { text: term }), h('dd', {}, ...body)];
+
+// The colour of a parcel follows the same priority everywhere (map, legend,
+// table, popup): an explicit `couleur`, else the colour of its `categorie`,
+// else the automatic palette slot.
+function colorOf(entry, i) {
+  return entry?.couleur || categoryColor(entry?.categorie) || parcelColor(i);
+}
+
+// A `#rrggbb` value for the native colour input (which cannot show an hsl()
+// or a named colour).
+function swatchHex(entry, i) {
+  const c = colorOf(entry, i);
+  return /^#[0-9a-f]{6}$/i.test(String(c)) ? c : PARCEL_PALETTE[Math.trunc(Number(i) || 0) % PARCEL_PALETTE.length];
+}
+
+function applyAnnotation(entry, patch) {
+  for (const key of ['nom', 'categorie', 'couleur']) {
+    if (!(key in patch)) continue;
+    const value = patch[key];
+    if (value === '' || value === null || value === undefined) delete entry[key];
+    else entry[key] = String(value).trim();
+  }
+}
+
+// Edit one found parcel's annotations and refresh every view of it. The
+// found entry is a spread of the authoritative `state.entries` item, so both
+// are updated (matched by identity); `state.entries` is what export and
+// localStorage serialize.
+function setParcelAnnotation(i, patch) {
+  const found = state.result?.found?.[i];
+  if (!found) return;
+  const entry = found.entry ?? (found.entry = { insee: state.result.requested?.[i]?.insee ?? '', section: '', numero: '' });
+  applyAnnotation(entry, patch);
+  const key = entryKey(entry);
+  const src = state.entries.find((e) => entryKey(e) === key);
+  if (src) applyAnnotation(src, patch);
+  renderLegend();
+  updateSwatch(i);
+  void renderMap({ fit: false, restoreView: true });
+  saveSelection();
+}
+
+function updateSwatch(i) {
+  const swatch = document.getElementById(`pc-swatch-${i}`);
+  if (!swatch) return;
+  swatch.style.setProperty('--pc-c', colorOf(state.result?.found?.[i]?.entry, i));
+}
 
 function communeName() {
   if (!state.commune) return '';
@@ -378,7 +428,7 @@ function drawLayers() {
   const parcels = state.result?.found ?? [];
   const foundBounds = L.latLngBounds([]);
   parcels.forEach(({ feature, entry }, i) => {
-    const color = entry?.couleur || categoryColor(entry?.categorie) || parcelColor(i);
+    const color = colorOf(entry, i);
     const casing = L.geoJSON(feature, {
       style: { color: '#ffffff', weight: 7, opacity: 0.85, fill: false },
       interactive: false,
@@ -431,7 +481,7 @@ function renderLegend() {
       prefixe: p.prefixe ?? '000',
     };
     const label = entry?.nom || refText(item, lang());
-    const color = entry?.couleur || categoryColor(entry?.categorie) || parcelColor(i);
+    const color = colorOf(entry, i);
     return h('button', {
       type: 'button',
       class: 'pc-legend-chip',
@@ -467,7 +517,7 @@ async function renderMap({ fit = false, restoreView = false } = {}) {
       map.setView(state.view.center, state.view.zoom);
     } else if (fit) {
       const bounds = foundBounds ?? communeBounds;
-      if (bounds) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 18 });
+      if (bounds) fitBoundsKeepContext(map, bounds, { pad: 0.25, maxZoom: 17, padding: [28, 28] });
     }
     map.invalidateSize();
   } catch {
@@ -482,6 +532,13 @@ function highlightParcel(i, on) {
   if (on) layer.bringToFront();
 }
 
+// Zoom onto `bounds` while keeping some surrounding context, so a single
+// parcel is never blown up so far that the neighbourhood disappears.
+function fitBoundsKeepContext(map, bounds, { pad = 0.4, maxZoom = 16, padding = [40, 40] } = {}) {
+  const target = bounds?.pad ? bounds.pad(pad) : bounds;
+  map.fitBounds(target, { padding, maxZoom });
+}
+
 async function focusParcel(i) {
   const layer = state.layers?.[i];
   if (!layer) return;
@@ -492,7 +549,7 @@ async function focusParcel(i) {
     return;
   }
   els.mapCard?.scrollIntoView({ block: 'start', behavior: smooth() });
-  map.fitBounds(layer.getBounds(), { padding: [40, 40], maxZoom: 18 });
+  fitBoundsKeepContext(map, layer.getBounds(), { pad: 0.6, maxZoom: 16 });
   layer.openPopup();
   layer.bringToFront();
 }
@@ -502,7 +559,7 @@ function fitParcels() {
   const L = state.L;
   const bounds = L.latLngBounds([]);
   for (const layer of state.layers) if (layer.getBounds().isValid()) bounds.extend(layer.getBounds());
-  if (bounds.isValid()) state.map.fitBounds(bounds, { padding: [28, 28], maxZoom: 18 });
+  if (bounds.isValid()) fitBoundsKeepContext(state.map, bounds, { pad: 0.25, maxZoom: 17, padding: [28, 28] });
 }
 
 function fitCommune() {
@@ -788,9 +845,10 @@ function saveSelection() {
 }
 
 function downloadSelection() {
-  const { items, errors } = entriesFromInput();
+  const { items: fresh, errors } = entriesFromInput();
   state.parseErrors = errors;
   renderParseErrors();
+  const items = carryAnnotations(fresh, state.entries);
   if (!items.length) {
     setError({ kind: errors.length ? 'all-unreadable' : 'empty' });
     renderStatus();
@@ -952,7 +1010,7 @@ async function run(itemsOverride = null) {
     const parsed = parseParcelList(state.input);
     const resolved = resolveItems(parsed.items, state.commune?.insee ?? null);
     state.parseErrors = [...parsed.errors, ...resolved.errors];
-    items = resolved.items;
+    items = carryAnnotations(resolved.items, state.entries);
   }
   renderParseErrors();
 
@@ -1144,12 +1202,59 @@ function fieldValue(feature, entry) {
   });
 }
 
+function annotationFields(i, entry) {
+  const nom = h('input', {
+    type: 'text',
+    class: 'pc-anno-input',
+    value: entry?.nom ?? '',
+    maxlength: '120',
+    autocomplete: 'off',
+    placeholder: T('e.g. the vines', 'p. ex. la vigne'),
+    'aria-label': T('Label (nom)', 'Étiquette (nom)'),
+  });
+  const categorie = h('input', {
+    type: 'text',
+    class: 'pc-anno-input',
+    value: entry?.categorie ?? '',
+    maxlength: '120',
+    autocomplete: 'off',
+    placeholder: T('e.g. vines', 'p. ex. vigne'),
+    'aria-label': T('Category', 'Catégorie'),
+  });
+  const couleur = h('input', {
+    type: 'color',
+    class: 'pc-anno-color',
+    value: swatchHex(entry, i),
+    'aria-label': T('Colour', 'Couleur'),
+  });
+  const auto = h('button', {
+    type: 'button',
+    class: 'pc-linkbtn',
+    onclick: () => { setParcelAnnotation(i, { couleur: '' }); couleur.value = swatchHex(state.result?.found?.[i]?.entry, i); },
+    text: T('auto', 'auto'),
+    title: T('Back to the automatic/category colour', 'Revenir à la couleur automatique / de la catégorie'),
+  });
+  const syncColor = () => { couleur.value = swatchHex(state.result?.found?.[i]?.entry, i); };
+  nom.addEventListener('change', () => { setParcelAnnotation(i, { nom: nom.value }); syncColor(); });
+  categorie.addEventListener('change', () => { setParcelAnnotation(i, { categorie: categorie.value }); syncColor(); });
+  couleur.addEventListener('change', () => { setParcelAnnotation(i, { couleur: couleur.value }); });
+
+  return h('div', { class: 'pc-anno' },
+    h('p', { class: 'pc-anno-h', text: T('Annotate this parcel', 'Annoter cette parcelle') }),
+    h('div', { class: 'pc-anno-grid' },
+      h('label', { class: 'pc-anno-field' }, h('span', { class: 'pc-anno-label', text: T('Label (nom)', 'Étiquette (nom)') }), nom),
+      h('label', { class: 'pc-anno-field' }, h('span', { class: 'pc-anno-label', text: T('Category', 'Catégorie') }), categorie),
+      h('label', { class: 'pc-anno-field' }, h('span', { class: 'pc-anno-label', text: T('Colour', 'Couleur') }), h('span', { class: 'pc-anno-colorrow' }, couleur, ' ', auto))),
+    h('p', { class: 'hint' }, T('These notes are written to the exported JSON and restored when the file is loaded again.', 'Ces notes sont écrites dans le JSON exporté et restaurées au prochain chargement du fichier.')));
+}
+
 function detailRow(feature, i, entry) {
   const fields = fieldValue(feature, entry);
   const group = state.result?.groups.find((g) => g.insee === entry?.insee);
   const sourceUrl = group?.sourceUrl ?? '';
   return h('tr', { class: 'pc-detail-row', id: `pc-detail-${i}`, hidden: true },
     h('td', { colspan: '8' },
+      annotationFields(i, entry),
       h('dl', { class: 'pc-fields' }, ...fields.flatMap(([term, value, mono]) => [
         h('dt', { text: term }),
         h('dd', {}, mono ? h('code', { text: value }) : value),
@@ -1200,7 +1305,7 @@ function table(found) {
       text: T('Show', 'Voir'),
     });
     const row = h('tr', {},
-      h('td', { class: 'pc-c' }, h('span', { class: 'pc-swatch', 'aria-hidden': 'true', style: `--pc-c:${parcelColor(i)}` })),
+      h('td', { class: 'pc-c' }, h('span', { id: `pc-swatch-${i}`, class: 'pc-swatch', 'aria-hidden': 'true', style: `--pc-c:${colorOf(entry, i)}` })),
       h('td', { text: String(p.section ?? '') }),
       h('td', { class: 'num', text: normalizeNumero(p.numero) ?? String(p.numero ?? '') }),
       h('td', { class: 'num', text: formatM2(p.contenance, lang()) }),
@@ -1513,13 +1618,27 @@ function mapSection() {
     state.labels = labelToggle.checked;
     if (state.result) void renderMap({ fit: false, restoreView: true });
   });
+  const largeToggle = h('button', {
+    type: 'button',
+    class: 'pc-btn small',
+    'aria-pressed': String(state.mapLarge),
+    onclick: () => {
+      state.mapLarge = !state.mapLarge;
+      els.map?.classList.toggle('pc-map--large', state.mapLarge);
+      largeToggle.setAttribute('aria-pressed', String(state.mapLarge));
+      largeToggle.textContent = state.mapLarge ? T('Shrink map', 'Réduire la carte') : T('Enlarge map', 'Agrandir la carte');
+      if (state.map) requestAnimationFrame(() => state.map.invalidateSize());
+    },
+    text: state.mapLarge ? T('Shrink map', 'Réduire la carte') : T('Enlarge map', 'Agrandir la carte'),
+  });
   return h('section', { class: 'card pc-map-card', 'aria-labelledby': 'pc-map-h' },
     h('div', { class: 'pc-map-head' },
       h('h2', { id: 'pc-map-h', text: T('Map', 'Carte') }),
       h('div', { class: 'pc-map-tools' },
         h('label', { class: 'pc-check' }, labelToggle, h('span', { text: T('Labels', 'Étiquettes') })),
         h('button', { type: 'button', class: 'pc-btn small', onclick: fitParcels, text: T('Fit parcels', 'Ajuster aux parcelles') }),
-        h('button', { type: 'button', class: 'pc-btn small', onclick: fitCommune, text: T('Fit commune', 'Ajuster à la commune') }))),
+        h('button', { type: 'button', class: 'pc-btn small', onclick: fitCommune, text: T('Fit commune', 'Ajuster à la commune') }),
+        largeToggle)),
     h('div', { id: 'pc-map', class: 'pc-map', role: 'region', 'aria-label': T('Map of the selected parcels', 'Carte des parcelles sélectionnées') }),
     h('p', { class: 'pc-attrib small muted' }, '© ',
     h('a', { href: 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener' }, 'OpenStreetMap'), ' contributors · ',

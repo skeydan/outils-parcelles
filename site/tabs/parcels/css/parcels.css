@@ -250,6 +250,7 @@
   background: var(--surface-2);
   border: 1px solid var(--border);
 }
+.pc-map.pc-map--large { height: min(88vh, 1200px); }
 .pc-map-empty {
   display: grid;
   place-items: center;
@@ -412,6 +413,44 @@
 .pc-fields dt { color: var(--ink-2); }
 .pc-fields dd { margin: 0; overflow-wrap: anywhere; }
 .pc-fields a { overflow-wrap: anywhere; }
+
+.pc-anno {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.pc-anno-h { margin: 0 0 8px; font-weight: 650; font-size: 0.9rem; }
+.pc-anno-grid { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.pc-anno-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; }
+.pc-anno-label { color: var(--ink-2); }
+.pc-anno-input {
+  font: inherit;
+  font-size: 0.9rem;
+  min-height: 36px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  width: 16ch;
+  max-width: 100%;
+}
+.pc-anno-color {
+  width: 46px;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.pc-anno-colorrow { display: inline-flex; align-items: center; gap: 8px; }
+@media (pointer: coarse) {
+  .pc-anno-input { min-height: 44px; }
+  .pc-anno-color { height: 44px; width: 54px; }
+}
 
 .pc-notfound {
   margin-top: 14px;

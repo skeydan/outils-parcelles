@@ -113,6 +113,39 @@ export function serializeSelection({ nom = '', entries = [] } = {}) {
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
+/** A stable identity for one parcel: "INSEE|SECTION|NUMERO". */
+export function entryKey(entry) {
+  return [
+    normalizeInsee(entry?.insee ?? entry?.commune),
+    normalizeSection(entry?.section),
+    normalizeNumero(entry?.numero),
+  ].join('|');
+}
+
+/**
+ * Carry the per-parcel annotations (`nom`, `categorie`, `couleur`) from
+ * `annotated` onto `items`, matched by identity. The textarea and the
+ * re-parsed reference list only carry `insee/section/numero`, so annotations
+ * would otherwise be lost whenever the list is re-read. Pure, testable.
+ */
+export function carryAnnotations(items, annotated) {
+  const byKey = new Map();
+  for (const entry of Array.isArray(annotated) ? annotated : []) {
+    const key = entryKey(entry);
+    if (!byKey.has(key)) byKey.set(key, entry);
+  }
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const src = byKey.get(entryKey(item));
+    if (!src) return item;
+    const out = { ...item };
+    for (const key of ['nom', 'categorie', 'couleur']) {
+      const value = src[key];
+      if (value) out[key] = value;
+    }
+    return out;
+  });
+}
+
 /** One line for the textarea: "50353 AB 1". */
 export function formatEntryLine(entry) {
   const insee = normalizeInsee(entry?.insee ?? entry?.commune);
