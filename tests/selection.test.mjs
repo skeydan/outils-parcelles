@@ -22,7 +22,7 @@ const entry = (insee, section, numero) => ({ insee, section, numero });
 
 test('JSON import: the documented shape, optional name, unknown fields', () => {
   const r = parseSelectionJson(JSON.stringify({
-    nom: '  Pouzols + Mailhac  ',
+    nom: '  Le Mont-Saint-Michel  ',
     future: { anything: true },
     parcelles: [
       { commune: '11296', section: 'b', numero: '0590', future: 'x' },
@@ -30,7 +30,7 @@ test('JSON import: the documented shape, optional name, unknown fields', () => {
     ],
   }));
   assert.equal(r.ok, true);
-  assert.equal(r.nom, 'Pouzols + Mailhac');
+  assert.equal(r.nom, 'Le Mont-Saint-Michel');
   assert.deepEqual(r.entries, [entry('11296', 'B', '590'), entry('11212', 'B', '93')]);
   assert.deepEqual(r.errors, []);
 });
@@ -141,7 +141,7 @@ test('URL form: fully qualified round-trip and old bare links', () => {
 
 test('export filename: slug, date, fallback', () => {
   const day = new Date('2026-11-24T12:00:00Z');
-  assert.equal(exportFilename('Pouzols + Mailhac', day), 'parcelles-pouzols-mailhac-2026-11-24.json');
+  assert.equal(exportFilename('Le Mont-Saint-Michel', day), 'parcelles-le-mont-saint-michel-2026-11-24.json');
   assert.equal(exportFilename('Saint-Étienne', day), 'parcelles-saint-etienne-2026-11-24.json');
   assert.equal(exportFilename('', day), 'parcelles-selection-2026-11-24.json');
   assert.equal(exportFilename('***', day), 'parcelles-selection-2026-11-24.json');

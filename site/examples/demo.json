@@ -1,0 +1,8 @@
+{
+  "nom": "Le Mont-Saint-Michel",
+  "parcelles": [
+    { "commune": "50353", "section": "AB", "numero": "1" },
+    { "commune": "50353", "section": "AB", "numero": "6" },
+    { "commune": "50353", "section": "AB", "numero": "129" }
+  ]
+}

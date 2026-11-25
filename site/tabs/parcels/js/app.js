@@ -56,7 +56,7 @@ const T = (en, fr) => (lang() === 'fr' ? fr : en);
 const tr = (o) => o?.[lang()] ?? o?.en ?? '';
 const { cite, list: sourceList } = citer(SOURCES, 'p-');
 const LEAFLET_JS = new URL('../../../vendor/leaflet/leaflet.js', import.meta.url).href;
-const SEED_URL = new URL('../../../examples/pouzols-mailhac.json', import.meta.url).href;
+const SEED_URL = new URL('../../../examples/demo.json', import.meta.url).href;
 const OSM_TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const OSM_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
@@ -741,27 +741,16 @@ function clearCommune() {
 
 function clearParcels() {
   state.input = '';
-  state.entries = [];
   state.selectionNom = '';
   state.importErrors = [];
-  state.result = null;
   state.parseErrors = [];
   state.errorInfo = null;
-  state.loading = false;
-  state.loadingCount = 1;
-  state.runToken += 1;
   if (els.input) els.input.value = '';
   if (els.selectionName) els.selectionName.value = '';
   clearStoredSelection();
-  renderImportErrors();
-  renderParseErrors();
-  renderError();
-  renderStatus();
-  renderResults();
-  clearParcelLayers();
-  writeRoute();
-  if (state.preview) void renderMap({ fit: true });
-  else showMapPlaceholder();
+  // Clearing returns to the first-visit state: the parcel list and the
+  // commune selection both go, and the get-started card comes back.
+  clearCommune();
 }
 
 // ---------------------------------------------------------------- import / export
@@ -1248,6 +1237,7 @@ function renderImportErrors() {
 }
 
 function renderResults() {
+  renderStart();
   if (!els.results || !els.summary || !els.table || !els.notfound) return;
   els.results.setAttribute('aria-busy', String(state.loading));
   if (state.loading) {
@@ -1342,6 +1332,23 @@ function introSection() {
     h('p', { class: 'small muted' }, T('Data: etalab-cadastre (DGFiP PCI), Licence Ouverte 2.0. Map: OpenStreetMap.', 'Données : etalab-cadastre (PCI de la DGFiP), Licence Ouverte 2.0. Carte : OpenStreetMap.'), ' ', ...cite('license', 'osm', 'bundler')));
 }
 
+function startSection() {
+  return h('section', { id: 'pc-start', class: 'card pc-start', 'aria-labelledby': 'pc-start-h', hidden: true },
+    h('h2', { id: 'pc-start-h', text: T('Get started', 'Par où commencer') }),
+    h('p', { class: 'muted' }, T(
+      'Two ways to look up parcels: type section and number references, or load a JSON file you exported earlier (or received from this tool).',
+      'Deux façons de retrouver des parcelles : saisir des références section et numéro, ou charger un fichier JSON exporté auparavant (ou reçu de cet outil).',
+    )),
+    h('div', { class: 'pc-actions' },
+      h('button', { type: 'button', class: 'pc-btn primary', onclick: () => els.input?.focus() }, T('Enter parcel references', 'Saisir des références de parcelles')),
+      h('button', { type: 'button', class: 'pc-btn', onclick: () => els.importBtn?.click() }, T('Load a local file (.json)', 'Charger un fichier local (.json)'))));
+}
+
+function renderStart() {
+  if (!els.start) return;
+  els.start.hidden = !(!state.entries.length && !state.commune && !state.loading);
+}
+
 function controlsSection() {
   const search = h('input', {
     id: 'pc-commune-search',
@@ -1353,7 +1360,7 @@ function controlsSection() {
     'aria-expanded': 'false',
     'aria-controls': 'pc-commune-list',
     'aria-describedby': 'pc-search-hint',
-    placeholder: T('Pouzols-Minervois, Ajaccio…', 'Pouzols-Minervois, Ajaccio…'),
+    placeholder: T('Le Mont-Saint-Michel, Ajaccio…', 'Le Mont-Saint-Michel, Ajaccio…'),
   });
   search.value = state.search.q;
   search.addEventListener('input', onSearchInput);
@@ -1383,7 +1390,7 @@ function controlsSection() {
     maxlength: '5',
     autocomplete: 'off',
     spellcheck: 'false',
-    placeholder: '11296',
+    placeholder: '50353',
     'aria-describedby': 'pc-insee-hint',
   });
   insee.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); useManualInsee(); } });
@@ -1393,7 +1400,7 @@ function controlsSection() {
       h('label', { for: 'pc-insee', text: T('INSEE code', 'Code INSEE') }),
       insee,
       h('button', { type: 'button', class: 'pc-btn small', onclick: useManualInsee, text: T('Use', 'Utiliser') })),
-    h('p', { id: 'pc-insee-hint', class: 'hint', text: T('For example 11296 (Pouzols-Minervois), 2A004 (Ajaccio), 97101 (Les Abymes).', 'Par exemple 11296 (Pouzols-Minervois), 2A004 (Ajaccio), 97101 (Les Abymes).') }),
+    h('p', { id: 'pc-insee-hint', class: 'hint', text: T('For example 50353 (Le Mont-Saint-Michel), 2A004 (Ajaccio), 97101 (Les Abymes).', 'Par exemple 50353 (Le Mont-Saint-Michel), 2A004 (Ajaccio), 97101 (Les Abymes).') }),
     h('p', { id: 'pc-insee-msg', class: 'err', role: 'alert' }),
     h('p', { class: 'hint' }, T('Paris, Lyon and Marseille are published by arrondissement (for example 75101, 69381, 13201).', 'Paris, Lyon et Marseille sont publiées par arrondissement (par exemple 75101, 69381, 13201).'), ' ', ...cite('insee')));
 
@@ -1420,7 +1427,7 @@ function controlsSection() {
     autocomplete: 'off',
     spellcheck: 'false',
     maxlength: '120',
-    placeholder: T('Pouzols + Mailhac', 'Pouzols + Mailhac'),
+    placeholder: T('Le Mont-Saint-Michel', 'Le Mont-Saint-Michel'),
   });
   selectionName.value = state.selectionNom;
   selectionName.addEventListener('input', () => { state.selectionNom = selectionName.value; });
@@ -1459,7 +1466,7 @@ function controlsSection() {
       h('button', { id: 'pc-export', type: 'button', class: 'pc-btn', onclick: downloadSelection, text: T('Export (.json)', 'Exporter (.json)') }),
       h('button', { id: 'pc-import', type: 'button', class: 'pc-btn', onclick: () => fileInput.click(), text: T('Import (.json)', 'Importer (.json)') }),
       fileInput,
-      h('button', { id: 'pc-seed', type: 'button', class: 'pc-btn', onclick: () => void loadSeed(), text: T('Example: Pouzols + Mailhac', 'Exemple : Pouzols + Mailhac') })),
+      h('button', { id: 'pc-seed', type: 'button', class: 'pc-btn', onclick: () => void loadSeed(), text: T('Example: Le Mont-Saint-Michel', 'Exemple : Le Mont-Saint-Michel') })),
     h('p', { class: 'hint' }, T('The exported file stays on your device: it is written by your browser and never uploaded. Import checks every entry and lists the malformed or missing ones.', 'Le fichier exporté reste sur votre appareil : il est écrit par votre navigateur et jamais envoyé. L’import vérifie chaque entrée et liste les entrées mal formées ou introuvables.')),
     h('div', { id: 'pc-import-errors' }),
     h('div', { id: 'pc-parse-errors' }),
@@ -1532,6 +1539,7 @@ function build() {
   state.tileWarned = false;
   ctx.root.replaceChildren(h('div', { class: 'pc' },
     introSection(),
+    startSection(),
     h('div', { class: 'pc-grid' },
       controlsSection(),
       mapSection(),
@@ -1548,6 +1556,8 @@ function build() {
     inseeMsg: document.getElementById('pc-insee-msg'),
     inseeDetails: document.querySelector('.pc-insee'),
     input: document.getElementById('pc-input'),
+    importBtn: document.getElementById('pc-import'),
+    start: document.getElementById('pc-start'),
     selectionName: document.getElementById('pc-selection-name'),
     importErrors: document.getElementById('pc-import-errors'),
     parseErrors: document.getElementById('pc-parse-errors'),
@@ -1624,14 +1634,15 @@ function writeRoute() {
   ctx.setParams(params);
 }
 
-/** A first visit or a cleared route: the saved selection, else the example. */
+/** A first visit or a cleared route: the saved selection, else the empty form. */
 function restoreInitial() {
   const stored = readStoredSelection();
   if (stored) {
     importText(stored);
-    return;
   }
-  void loadSeed();
+  // No saved selection: leave the empty form. The "get started" card offers
+  // the two entry points (type references, or load a local file); the
+  // example is one tap away, not the default.
 }
 
 export function mount(root, { params, setParams }) {

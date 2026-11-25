@@ -5,9 +5,9 @@
 // breaking older files.
 //
 // {
-//   "nom": "Pouzols + Mailhac",          // optional
+//   "nom": "Le Mont-Saint-Michel",      // optional
 //   "parcelles": [
-//     { "commune": "11296", "section": "B", "numero": "590" }
+//     { "commune": "50353", "section": "AB", "numero": "1" }
 //   ]
 // }
 //
@@ -92,7 +92,7 @@ export function serializeSelection({ nom = '', entries = [] } = {}) {
   return `${JSON.stringify(out, null, 2)}\n`;
 }
 
-/** One line for the textarea: "11296 B 590". */
+/** One line for the textarea: "50353 AB 1". */
 export function formatEntryLine(entry) {
   const insee = normalizeInsee(entry?.insee ?? entry?.commune);
   const section = normalizeSection(entry?.section);
@@ -141,7 +141,7 @@ export function resolveItems(items, fallbackInsee = null) {
   return { items: out, errors };
 }
 
-/** URL form: "11296-B590,11212-B93" (always fully qualified). */
+/** URL form: "50353-AB1,46235-AB318" (always fully qualified). */
 export function formatSelectionParam(entries) {
   return (Array.isArray(entries) ? entries : [])
     .map((entry) => `${normalizeInsee(entry?.insee ?? entry?.commune)}-${canonicalToken(entry)}`)
@@ -150,7 +150,7 @@ export function formatSelectionParam(entries) {
 
 /**
  * Read the URL form. A token without a separator inherits `fallbackInsee`,
- * so old "#/parcels?c=11296&p=B590,B593" links keep working. "-" is the
+ * so old "#/parcels?c=50353&p=AB1,AB6" links keep working. "-" is the
  * canonical separator; "~" and ":" from earlier drafts are still accepted.
  */
 export function parseSelectionParam(value, fallbackInsee = null) {
@@ -173,7 +173,7 @@ export function parseSelectionParam(value, fallbackInsee = null) {
   return { items, errors };
 }
 
-/** "parcelles-pouzols-mailhac-2026-11-24.json" */
+/** "parcelles-le-mont-saint-michel-2026-11-24.json" */
 export function exportFilename(nom, date = new Date()) {
   const slug = String(nom ?? '')
     .normalize('NFD')

@@ -46,7 +46,7 @@ export function departmentOf(value) {
   return insee.slice(0, 2);
 }
 
-/** Per-commune cadastre file, e.g. cadastre-11296-parcelles.json.gz. */
+/** Per-commune cadastre file, e.g. cadastre-50353-parcelles.json.gz. */
 export function communeFileUrl(insee, layer) {
   const code = normalizeInsee(insee);
   const dep = departmentOf(code);

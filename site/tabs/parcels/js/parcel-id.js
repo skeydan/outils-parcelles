@@ -5,11 +5,11 @@
 // A reference is a section (one or two letters) and a number (1 to 4 digits),
 // optionally preceded by the 3-digit prefix and the 5-character INSEE code:
 //
-//   B 590   B590   B-590   b 590   B.590   B/590
-//   0590                            (number only, matched across sections)
-//   000 B 590                       (prefix + section + number)
-//   11296 B 590   11296B590         (INSEE + section + number)
-//   112960000B0590                  (full parcel id: INSEE + prefix + section + number)
+//   AB 1   AB1   AB-1   ab 1   AB.1   AB/1
+//   0001                            (number only, matched across sections)
+//   000 AB 1                        (prefix + section + number)
+//   50353 AB 1   50353AB1           (INSEE + section + number)
+//   50353000AB0001                  (full parcel id: INSEE + prefix + section + number)
 //
 // The data sometimes zero-pads the number ("0002") and sometimes not ("2"),
 // so both sides are compared on the number without leading zeros.

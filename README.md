@@ -15,8 +15,8 @@ tracking, no cookies. French and English, light and dark, keyboard and
 phone. The URL carries the state, so a result is shareable and bookmarkable.
 
 ```
-#/parcels?c=11296&p=B590%2CB593%2CB1137
-#/parcels?p=11296-B627%2C11212-B93&n=Pouzols+%2B+Mailhac
+#/parcels?c=50353&p=AB1%2CAB6%2CAB129
+#/parcels?p=50353-AB1%2C46235-AB318&n=Deux+communes
 ```
 
 ## Run it
@@ -46,11 +46,11 @@ and common separators do not matter.
 
 | Input | Meaning |
 | --- | --- |
-| `B 590`, `B590`, `B-590`, `B.590`, `b_0590` | section + number |
-| `0590`, `590` | number only; matched across the commune's sections |
-| `000 B 590`, `001B590` | prefix + section + number |
-| `11296 B 590`, `11296B590` | INSEE + section + number (the commune is checked) |
-| `112960000B0590` | full parcel id (14 characters: INSEE + 3-digit prefix + 2-character section + 4-digit number) |
+| `AB 1`, `AB1`, `AB-1`, `AB.1`, `ab_0001` | section + number |
+| `0001`, `1` | number only; matched across the commune's sections |
+| `000 AB 1`, `001AB1` | prefix + section + number |
+| `50353 AB 1`, `50353AB1` | INSEE + section + number (the commune is checked) |
+| `50353000AB0001` | full parcel id (14 characters: INSEE + 3-digit prefix + 2-character section + 4-digit number) |
 
 A full id from the data contains the section **zero-padded** (`0B`), while
 the GeoJSON `section` property is `B`; both are accepted and normalized.
@@ -59,7 +59,7 @@ dropped. The limit is 100 references per lookup.
 
 If no commune is selected yet but every reference carries the same INSEE
 code, that commune is used. A list may mix communes as long as **every line
-starts with its INSEE code** (`11296 B 590`, `11212 B 93`); bare references
+starts with its INSEE code** (`50353 AB 1`, `46235 AB 318`); bare references
 still use the commune selected above. Each commune is fetched once, and the
 table and map show the parcels together. Lines that cannot be read are
 listed one by one, with the reason, and never guessed.
@@ -74,7 +74,8 @@ codes says so and gives a worked example.
 (.json)** reads a file chosen on your device, validates every entry, keeps
 the valid ones, and reports each malformed entry with its 1-based position.
 The selection is also written to `localStorage` after a successful run, so
-returning to the site restores it; **Clear parcels** removes that copy.
+returning to the site restores it; **Clear parcels** removes that copy and
+returns to the empty first-visit form.
 
 Nothing is uploaded: the export is a `Blob` written by the browser, the
 import uses the File API, and the saved copy is `localStorage` only. There
@@ -84,16 +85,16 @@ Format:
 
 ```json
 {
-  "nom": "Pouzols + Mailhac",
+  "nom": "Le Mont-Saint-Michel",
   "parcelles": [
-    { "commune": "11296", "section": "B", "numero": "590" },
-    { "commune": "11212", "section": "B", "numero": "93" }
+    { "commune": "50353", "section": "AB", "numero": "1" },
+    { "commune": "50353", "section": "AB", "numero": "6" }
   ]
 }
 ```
 
 - `nom` is optional; it is shown as the selection name and reused in the
-  export filename (`parcelles-pouzols-mailhac-2026-11-24.json`).
+  export filename (`parcelles-le-mont-saint-michel-2026-11-24.json`).
 - `commune` is the 5-character INSEE code. `section` is one or two letters;
   `numero` may be zero-padded (`"0590"` = `"590"`). Both are normalized.
 - A bare array is accepted instead of the object. Unknown fields are
@@ -102,11 +103,10 @@ Format:
 - Entries that are well formed but absent from the commune are listed in
   the not-found report (with the commune name), not silently dropped.
 
-The example **Pouzols + Mailhac** (18 parcels: 14 in `11296`
-Pouzols-Minervois, 4 in `11212` Mailhac) lives in
-[`site/examples/pouzols-mailhac.json`](site/examples/pouzols-mailhac.json).
-A first visit with no saved selection loads it automatically; the
-**Example: Pouzols + Mailhac** button loads it again.
+The example **Le Mont-Saint-Michel** (3 parcels in `50353`) lives in
+[`site/examples/demo.json`](site/examples/demo.json). A first visit now
+opens on an empty form with a “get started” card (type references, or load
+a file); the **Example: Le Mont-Saint-Michel** button loads the demo again.
 
 ## What it shows
 
@@ -114,7 +114,7 @@ For each found parcel:
 
 | Field | Meaning |
 | --- | --- |
-| `id` | parcel id, e.g. `112960000B0590` |
+| `id` | parcel id, e.g. `50353000AB0001` |
 | `commune` | INSEE code of the commune |
 | `prefixe` | 3-digit prefix (usually `000`) |
 | `section` | section letter(s), `A`, `B`, `AB`, … |
@@ -192,7 +192,7 @@ The smallest correct reference is used, on demand and cached in memory:
 2. **Manual fallback**: type the INSEE code directly. This works when the
    search API is down and for communes whose name is ambiguous.
 3. **Official name and outline**: one per-commune `communes` layer (about
-   3 KB gzipped for 11296) gives the spelling used in the table and the
+   3 KB gzipped for 50353) gives the spelling used in the table and the
    dashed commune outline; it also provides the fallback zoom when none of
    the requested parcels is found.
 
@@ -201,8 +201,8 @@ page that must stay light (sizes gzipped, measured 2026-11-24):
 
 - France-wide communes file: ~234 MB.
 - One department's communes file (Aude, 11): ~2.1 MB of geometry.
-- One commune's outline: ~3.3 KB; one commune's parcels (11296): ~228 KB,
-  2 422 features.
+- One commune's outline: ~3.3 KB; one commune's parcels (50353): ~40 KB,
+  260 features.
 
 Nothing is bundled: every reference is fetched on demand. The parcel file
 is cached per commune in memory for the life of the page (a promise cache
@@ -243,17 +243,17 @@ Only non-default state is written, canonicalized with `URLSearchParams`:
 
 - `c` — selected commune INSEE code (kept for bare references);
 - `p` — comma-separated preferences. One commune: bare canonical tokens
-  (`B590`, `001B12`, …) with `c`; several communes: every token carries its
-  INSEE code, `11296-B590,11212-B93`;
+  (`AB1`, `001AB1`, …) with `c`; several communes: every token carries its
+  INSEE code, `50353-AB1,46235-AB318`;
 - `n` — optional selection name.
 
 Examples:
 
 ```
 #/parcels
-#/parcels?c=11296
-#/parcels?c=11296&p=B590%2CB593%2CB1137
-#/parcels?p=11296-B627%2C11212-B93&n=Pouzols+%2B+Mailhac
+#/parcels?c=50353
+#/parcels?c=50353&p=AB1%2CAB6%2CAB129
+#/parcels?p=50353-AB1%2C46235-AB318&n=Deux+communes
 ```
 
 The hash router is `#/<tab>?<state>`. Unknown routes and untidy hashes fall
@@ -285,7 +285,7 @@ site/tabs/parcels/js/cadastre.js fetch + decompress + cache
 site/tabs/parcels/js/geo.js      colours and bounding boxes
 site/tabs/parcels/js/sources.js  the cited sources
 site/tabs/parcels/css/parcels.css
-site/examples/pouzols-mailhac.json  the 18-parcel example (14 + 4)
+site/examples/demo.json             the Mont-Saint-Michel example (3 parcels)
 site/vendor/leaflet/             Leaflet 1.9.4 + licence
 tests/*.test.mjs                 node:test, pure functions only
 scripts/e2e.mjs                  Playwright, real endpoint, screenshots
@@ -315,10 +315,11 @@ deploy/default.conf.template     nginx + CSP for the data sources and tiles
   registry, vendored Leaflet files.
 
 `npm run e2e` drives Chromium against the real cadastre endpoint: the
-seeded 18-parcel, two-commune example; its 14 + 4 commune split, totals and
-single map; export/import round-trip, malformed-entry report, not-found
-report, localStorage restore, and the example button; then a real lookup
-for commune 11296 (parcels B 590, B 593, B 1137 and a missing B 9999):
+Mont-Saint-Michel example (empty first visit with the get-started card,
+then the demo); export/import round-trip, malformed-entry report, not-found
+report, localStorage restore, and the example button; a two-commune import;
+then a real lookup for commune 50353 (parcels AB 1, AB 6, AB 129 and a
+missing AB 9999):
 table values in m² and ha/a/ca, total, not-found report, popup, detail row,
 shareable URL, commune search by name, 404 and offline errors,
 language/theme, phone tab targets, no horizontal overflow and no console
