@@ -15,6 +15,22 @@
   overflow-wrap: anywhere;
 }
 
+.pc-json summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.pc-json-code {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  font: 0.9rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
 .pc-grid {
   display: grid;
   grid-template-columns: minmax(0, 390px) minmax(0, 1fr);

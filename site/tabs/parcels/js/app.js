@@ -1467,6 +1467,13 @@ function controlsSection() {
       h('button', { id: 'pc-import', type: 'button', class: 'pc-btn', onclick: () => fileInput.click(), text: T('Import (.json)', 'Importer (.json)') }),
       fileInput,
       h('button', { id: 'pc-seed', type: 'button', class: 'pc-btn', onclick: () => void loadSeed(), text: T('Example: Le Mont-Saint-Michel', 'Exemple : Le Mont-Saint-Michel') })),
+    h('details', { class: 'pc-json' },
+      h('summary', { text: T('JSON file format', 'Format du fichier JSON') }),
+      h('p', { class: 'hint' }, T(
+        'A JSON object with an optional "nom" and a "parcelles" array. Each entry needs "commune" (5-character INSEE code), "section" and "numero" (zero-padding is fine). A bare array of entries is also accepted, and unknown fields are ignored. Up to 100 parcels.',
+        'Un objet JSON avec un « nom » facultatif et un tableau « parcelles ». Chaque entrée contient « commune » (code INSEE à 5 caractères), « section » et « numero » (les zéros de tête sont acceptés). Un simple tableau d’entrées est aussi accepté, et les champs inconnus sont ignorés. Jusqu’à 100 parcelles.',
+      )),
+      h('pre', { class: 'pc-json-code', text: '{\n  "nom": "Le Mont-Saint-Michel",\n  "parcelles": [\n    { "commune": "50353", "section": "AB", "numero": "1" }\n  ]\n}' })),
     h('p', { class: 'hint' }, T('The exported file stays on your device: it is written by your browser and never uploaded. Import checks every entry and lists the malformed or missing ones.', 'Le fichier exporté reste sur votre appareil : il est écrit par votre navigateur et jamais envoyé. L’import vérifie chaque entrée et liste les entrées mal formées ou introuvables.')),
     h('div', { id: 'pc-import-errors' }),
     h('div', { id: 'pc-parse-errors' }),
