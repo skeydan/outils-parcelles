@@ -36,7 +36,7 @@ import {
   NoDecompressionError,
   BadFileError,
 } from './cadastre.js';
-import { bboxOfGeoJSON, parcelColor } from './geo.js';
+import { bboxOfGeoJSON, parcelColor, categoryColor } from './geo.js';
 import {
   MAX_SELECTION,
   parseSelectionJson,
@@ -334,6 +334,7 @@ function popupContent(feature, entry) {
   const p = feature.properties ?? {};
   const rows = [];
   if (entry?.nom) rows.push([T('Note', 'Note'), entry.nom]);
+  if (entry?.categorie) rows.push([T('Category', 'Catégorie'), entry.categorie]);
   rows.push(
     [T('Commune', 'Commune'), `${entry?.commune ?? ''} (${entry?.insee ?? p.commune ?? ''})`.trim()],
     [T('Area', 'Surface'), `${formatM2(p.contenance, lang())} m² · ${formatHaCa(p.contenance)}`],
@@ -377,7 +378,7 @@ function drawLayers() {
   const parcels = state.result?.found ?? [];
   const foundBounds = L.latLngBounds([]);
   parcels.forEach(({ feature, entry }, i) => {
-    const color = entry?.couleur || parcelColor(i);
+    const color = entry?.couleur || categoryColor(entry?.categorie) || parcelColor(i);
     const casing = L.geoJSON(feature, {
       style: { color: '#ffffff', weight: 7, opacity: 0.85, fill: false },
       interactive: false,
@@ -430,11 +431,11 @@ function renderLegend() {
       prefixe: p.prefixe ?? '000',
     };
     const label = entry?.nom || refText(item, lang());
-    const color = entry?.couleur || parcelColor(i);
+    const color = entry?.couleur || categoryColor(entry?.categorie) || parcelColor(i);
     return h('button', {
       type: 'button',
       class: 'pc-legend-chip',
-      title: `${T('Show on the map', 'Voir sur la carte')} — ${label} (${entry?.commune ?? entry?.insee ?? ''})`,
+      title: `${T('Show on the map', 'Voir sur la carte')} — ${label}${entry?.categorie ? ` · ${entry.categorie}` : ''} (${entry?.commune ?? entry?.insee ?? ''})`,
       onclick: () => focusParcel(i),
       onmouseenter: () => highlightParcel(i, true),
       onmouseleave: () => highlightParcel(i, false),
@@ -1495,10 +1496,10 @@ function controlsSection() {
     h('details', { class: 'pc-json' },
       h('summary', { text: T('JSON file format', 'Format du fichier JSON') }),
       h('p', { class: 'hint' }, T(
-        'A JSON object with an optional "nom" and a "parcelles" array. Each entry needs "commune" (5-character INSEE code), "section" and "numero" (zero-padding is fine); an optional per-parcel "nom" adds a label and "couleur" a colour (any CSS colour). A bare array of entries is also accepted, and unknown fields are ignored. Up to 100 parcels.',
-        'Un objet JSON avec un « nom » facultatif et un tableau « parcelles ». Chaque entrée contient « commune » (code INSEE à 5 caractères), « section » et « numero » (les zéros de tête sont acceptés) ; un « nom » facultatif ajoute une étiquette et « couleur » une couleur (toute couleur CSS). Un simple tableau d’entrées est aussi accepté, et les champs inconnus sont ignorés. Jusqu’à 100 parcelles.',
+        'A JSON object with an optional "nom" and a "parcelles" array. Each entry needs "commune" (5-character INSEE code), "section" and "numero" (zero-padding is fine); an optional per-parcel "nom" adds a label, "couleur" a colour and "categorie" a category (parcels of one category share a colour). A bare array of entries is also accepted, and unknown fields are ignored. Up to 100 parcels.',
+        'Un objet JSON avec un « nom » facultatif et un tableau « parcelles ». Chaque entrée contient « commune » (code INSEE à 5 caractères), « section » et « numero » (les zéros de tête sont acceptés) ; un « nom » facultatif ajoute une étiquette, « couleur » une couleur et « categorie » une catégorie (les parcelles d’une même catégorie partagent une couleur). Un simple tableau d’entrées est aussi accepté, et les champs inconnus sont ignorés. Jusqu’à 100 parcelles.',
       )),
-      h('pre', { class: 'pc-json-code', text: '{\n  "nom": "Le Mont-Saint-Michel",\n  "parcelles": [\n    { "commune": "50353", "section": "AB", "numero": "1", "nom": "the field by the road", "couleur": "#e6194b" }\n  ]\n}' })),
+      h('pre', { class: 'pc-json-code', text: '{\n  "nom": "Le Mont-Saint-Michel",\n  "parcelles": [\n    { "commune": "50353", "section": "AB", "numero": "1", "nom": "the field by the road", "couleur": "#e6194b", "categorie": "vines" }\n  ]\n}' })),
     h('p', { class: 'hint' }, T('The exported file stays on your device: it is written by your browser and never uploaded. Import checks every entry and lists the malformed or missing ones.', 'Le fichier exporté reste sur votre appareil : il est écrit par votre navigateur et jamais envoyé. L’import vérifie chaque entrée et liste les entrées mal formées ou introuvables.')),
     h('div', { id: 'pc-import-errors' }),
     h('div', { id: 'pc-parse-errors' }),

@@ -30,6 +30,18 @@ export function parcelColor(i) {
   return `hsl(${Math.round((n * 137.508) % 360)} 65% 40%)`;
 }
 
+/**
+ * A stable colour for a category name, so every parcel in the same category
+ * matches. Returns null for an empty name. Case- and space-insensitive.
+ */
+export function categoryColor(name) {
+  const s = String(name ?? '').trim().toLowerCase();
+  if (!s) return null;
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return PARCEL_PALETTE[h % PARCEL_PALETTE.length];
+}
+
 function walkCoords(coords, visit) {
   if (!Array.isArray(coords)) return;
   if (typeof coords[0] === 'number') {

@@ -87,7 +87,7 @@ Format:
 {
   "nom": "Le Mont-Saint-Michel",
   "parcelles": [
-    { "commune": "50353", "section": "AB", "numero": "1", "nom": "the field by the road", "couleur": "#e6194b" },
+    { "commune": "50353", "section": "AB", "numero": "1", "nom": "the field by the road", "couleur": "#e6194b", "categorie": "vines" },
     { "commune": "50353", "section": "AB", "numero": "6" }
   ]
 }
@@ -98,8 +98,9 @@ Format:
 - `commune` is the 5-character INSEE code. `section` is one or two letters;
   `numero` may be zero-padded (`"0590"` = `"590"`). Both are normalized.
 - Each parcel may add a `nom` (a short label shown on the map, in the legend
-  and in the popup) and a `couleur` (any CSS colour, e.g. `#e6194b` or
-  `red`); both are optional and override the automatic label and colour.
+  and in the popup), a `couleur` (any CSS colour, e.g. `#e6194b` or `red`)
+  and a `categorie` (a grouping name — parcels in one category share a
+  colour); all are optional and override the automatic label and colour.
 - A bare array is accepted instead of the object. Unknown fields are
   ignored, so a newer file with extra group/colour fields still imports;
   duplicates are dropped.
@@ -234,11 +235,11 @@ a low-volume personal tool. Tiles are the only map resource that needs the
 network: if they fail, the parcel outlines and the table still work and a
 note says the basemap could not load.
 
-Each found parcel gets a distinct colour (or its `couleur` from the imported
-file), a permanent label (its `nom`, or section/number — switchable), a click
-popup with section, number, m², ha/a/ca, `arpente` and the full id, and a
-legend chip that zooms to it. Hovering (or focusing) a legend chip highlights
-the matching parcel on the map. The map fits the
+Each found parcel gets a distinct colour (or its `couleur`/`categorie` from
+the imported file), a permanent label (its `nom`, or section/number — switchable),
+a click popup with section, number, m², ha/a/ca, `arpente` and the full id,
+and a legend chip that zooms to it. Hovering (or focusing) a legend chip
+highlights the matching parcel on the map. The map fits the
 found parcels; when none is found it fits the commune outline. The detail
 row shows every source property and links the source file.
 

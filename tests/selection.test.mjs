@@ -93,34 +93,34 @@ test('serialization: canonical shape, accents kept in nom, trailing newline', ()
   ]);
 });
 
-test('JSON import: per-parcel nom (label) and couleur are kept', () => {
+test('JSON import: per-parcel nom, couleur and categorie are kept', () => {
   const r = parseSelectionJson(JSON.stringify({
     nom: 'Mes parcelles',
     parcelles: [
-      { commune: '11296', section: 'B', numero: '627', nom: ' 1 h 23,5a ', couleur: '#e6194b' },
+      { commune: '11296', section: 'B', numero: '627', nom: ' 1 h 23,5a ', couleur: '#e6194b', categorie: 'vigne' },
       { commune: '11212', section: 'B', numero: '93', nom: 'la vigne' },
       { commune: '11296', section: 'A', numero: '590' },
     ],
   }));
   assert.equal(r.ok, true);
-  assert.deepEqual(r.entries[0], { insee: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b' });
+  assert.deepEqual(r.entries[0], { insee: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b', categorie: 'vigne' });
   assert.deepEqual(r.entries[1], { insee: '11212', section: 'B', numero: '93', nom: 'la vigne' });
   assert.deepEqual(r.entries[2], { insee: '11296', section: 'A', numero: '590' });
 });
 
-test('serialization: per-parcel nom and couleur round-trip', () => {
+test('serialization: per-parcel nom, couleur and categorie round-trip', () => {
   const text = serializeSelection({
     nom: 'Pouzols + Mailhac',
     entries: [
-      { insee: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b' },
+      { insee: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b', categorie: 'vigne' },
       { insee: '11296', section: 'B', numero: '616' },
     ],
   });
   const back = JSON.parse(text);
   assert.equal(back.nom, 'Pouzols + Mailhac');
-  assert.deepEqual(back.parcelles[0], { commune: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b' });
+  assert.deepEqual(back.parcelles[0], { commune: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b', categorie: 'vigne' });
   assert.deepEqual(back.parcelles[1], { commune: '11296', section: 'B', numero: '616' });
-  assert.deepEqual(parseSelectionJson(text).entries[0], { insee: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b' });
+  assert.deepEqual(parseSelectionJson(text).entries[0], { insee: '11296', section: 'B', numero: '627', nom: '1 h 23,5a', couleur: '#e6194b', categorie: 'vigne' });
 });
 
 test('textarea lines and commune grouping', () => {

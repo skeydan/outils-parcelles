@@ -8,13 +8,15 @@
 //   "nom": "Le Mont-Saint-Michel",      // optional, the whole selection's name
 //   "parcelles": [
 //     { "commune": "50353", "section": "AB", "numero": "1",
-//       "nom": "the field by the road", "couleur": "#e6194b" }   // both optional
+//       "nom": "the field by the road", "couleur": "#e6194b",
+//       "categorie": "vines" }           // all three optional
 //   ]
 // }
 //
 // `commune` is the 5-character INSEE code. `numero` may be zero-padded.
-// A parcel's `nom` (a short label) and `couleur` (any CSS colour) are kept
-// and shown on the map, in the legend and in the popup. Entries are
+// A parcel's `nom` (a short label), `couleur` (any CSS colour) and
+// `categorie` (a grouping name; parcels of one category share a colour) are
+// kept and shown on the map, in the legend and in the popup. Entries are
 // normalized (INSEE uppercase, section without leading zero, number without
 // leading zeros) and duplicates are dropped.
 
@@ -76,9 +78,11 @@ export function parseSelectionJson(text) {
     seen.add(key);
     const entryNom = typeof row.nom === 'string' ? row.nom.trim() : '';
     const couleur = typeof row.couleur === 'string' ? row.couleur.trim() : '';
+    const categorie = typeof row.categorie === 'string' ? row.categorie.trim() : '';
     const entryObj = { insee: commune, section, numero };
     if (entryNom) entryObj.nom = entryNom;
     if (couleur) entryObj.couleur = couleur;
+    if (categorie) entryObj.categorie = categorie;
     entries.push(entryObj);
   });
   return { ok: entries.length > 0, nom, entries, errors };
@@ -95,8 +99,10 @@ export function serializeSelection({ nom = '', entries = [] } = {}) {
       };
       const entryNom = String(entry?.nom ?? '').trim();
       const couleur = String(entry?.couleur ?? '').trim();
+      const categorie = String(entry?.categorie ?? '').trim();
       if (entryNom) out.nom = entryNom;
       if (couleur) out.couleur = couleur;
+      if (categorie) out.categorie = categorie;
       return out;
     })
     .filter((entry) => INSEE_RE.test(entry.commune) && entry.section && entry.numero);
